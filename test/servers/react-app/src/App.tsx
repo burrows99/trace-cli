@@ -1,6 +1,7 @@
 // Checkout cart rendered via React, traced through Chrome (CDP). The displayed total is computed by the
 // buggy displayTotal() in ./price.ts, so the trace shows the cents being dropped per line item.
 
+import React from "react";          // explicit import → classic JSX runtime works regardless of dev pre-bundling
 import { displayTotal, type Line } from "./price";
 
 const CART: Line[] = [

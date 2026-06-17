@@ -66,7 +66,9 @@ async function fetchTax(amount, region) {
 async function checkout(cart, coupon, region) {
   const items = lineItems(cart);
   let subtotal = 0;
-  for (const it of items) subtotal += it.lineTotal;
+  for (const it of items) {
+    subtotal += it.lineTotal;          // own line → breakpoint here hits once per item (mutation lineage)
+  }
   const { rate, discounted } = applyCoupon(subtotal, coupon);
   const tax = await fetchTax(discounted, region);
   const total = Math.round((discounted + tax) * 100) / 100;

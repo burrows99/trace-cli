@@ -18,11 +18,11 @@ export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:9000}"
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-minioadmin}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-minioadmin}"
 
-echo "# 1 — Node coupon bug: discount subtracts the RATE as flat dollars (44.48 → 44.38, should be ~40.03)"
-$T --node 9230 --emit "$C" \
-  --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1&coupon=SAVE10&region=US"' \
-  --bp "test/servers/node-api/server.js@discounted = subtotal - rate" \
-  --expr subtotal --expr rate --expr 'subtotal*(1-rate)'
+echo "# 1 — Node checkout subtotal loop: subtotal accumulates per line item → LINEAGE (coupon bug shows in the response)"
+$T --node 9230 --emit "$C" --max-hits 10 \
+  --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1,gizmo:3&coupon=SAVE10&region=US"' \
+  --bp "test/servers/node-api/server.js@subtotal += it.lineTotal" \
+  --expr subtotal --expr 'it.sku' --expr 'it.lineTotal'
 
 echo "# 2 — Python tax compounding bug: tax balloons across phases (mutation lineage tells the story)"
 $T --python 5679 --emit "$C" --max-hits 5 \

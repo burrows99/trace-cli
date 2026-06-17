@@ -188,14 +188,14 @@ function renderMutations(lineage) {
     ${rows}</div>`;
 }
 
-function renderEvent(e) {
+function renderEvent(e, i) {
   const a = e.attrs || {};
   const secs = [];
   if (a.locals && Object.keys(a.locals).length) secs.push(`<div class="sec"><h4>locals</h4>${kvTable(a.locals)}</div>`);
   if (a.exprs && Object.keys(a.exprs).length) secs.push(`<div class="sec"><h4>watch</h4>${kvTable(a.exprs)}</div>`);
   if (a.stack && a.stack.length) secs.push(`<div class="sec"><h4>stack</h4><div class="stack">${a.stack.map((f) => `<div>${esc(f).replace(/^([^ (]+)/, "<b>$1</b>")}</div>`).join("")}</div></div>`);
   const locStr = e.loc ? `${e.loc.file}:${e.loc.line ?? ""}` : "";
-  return `<div class="evt">
+  return `<div class="evt${i === 0 ? " open" : ""}">
     <div class="head">
       <span class="seq">#${e.seq}</span>
       <span class="kind">${esc(e.kind)}</span>

@@ -1,3 +1,4 @@
+import React from "react";          // explicit import → classic JSX runtime works regardless of dev pre-bundling
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 
