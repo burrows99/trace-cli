@@ -26,6 +26,8 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1071.0",
+    "@aws-sdk/s3-request-presigner": "^3.1071.0",
     "@vscode/debugadapter-testsupport": "^1.68.0",
     "@vscode/debugprotocol": "^1.68.0",
     "chrome-remote-interface": "^0.34.0",

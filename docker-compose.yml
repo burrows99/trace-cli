@@ -1,9 +1,12 @@
-# Run the trace collector + realtime UI:
+# Run the trace collector + realtime UI + a local S3 (mock-aws) for recordings:
 #   docker compose up --build
-#   open http://localhost:4747
+#   open http://localhost:4747          # the trace UI
+#   open http://localhost:9001          # mock-aws (MinIO) console — minioadmin / minioadmin
 #
-# Emit traces to it from the host (the CLI runs where your debug target is reachable):
-#   trace dynamic --python 5678 --bp app.py:42 --curl '…' --emit http://localhost:4747
+# Emit traces from the host (the CLI runs where your debug target is reachable). Chrome traces record by
+# default and upload the video to mock-aws, attaching a link to the trace:
+#   export S3_ENDPOINT=http://localhost:9000
+#   trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9 --emit http://localhost:4747
 services:
   trace-collector:
     build: .
@@ -15,4 +18,20 @@ services:
       - ./.trace-data:/data
     environment:
       - TRACE_DATA=/data
+    restart: unless-stopped
+
+  # S3-compatible object store standing in for AWS S3. The CLI talks the S3 API (AWS SDK) to it; in
+  # production you point S3_ENDPOINT at real AWS instead — no code change.
+  mock-aws:
+    image: minio/minio
+    container_name: mock-aws
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9000:9000"   # S3 API endpoint → set S3_ENDPOINT=http://localhost:9000
+      - "9001:9001"   # web console
+    volumes:
+      - ./.mock-aws-data:/data
     restart: unless-stopped

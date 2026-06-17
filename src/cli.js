@@ -10,6 +10,7 @@ import { Command, CommanderError } from "commander";
 import { writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { runDynamic } from "./commands/dynamic.js";
 import { runDoctor, renderDoctor } from "./commands/doctor.js";
@@ -18,6 +19,7 @@ import { checkBreakpoint, checkPython } from "./engine/trace.js";
 import { parseBpSpec } from "./engine/breakpoints.js";
 import { renderTrace, renderLineage } from "./engine/render.js";
 import { renderVideo } from "./engine/record.js";
+import { uploadFile } from "./storage/s3.js";
 import { VERSION } from "./schema/envelope.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,11 +60,13 @@ async function dynamicAction(o) {
 
   if (!o.bp.length) usage("dynamic needs at least one --bp (file:line or file@substring)");
 
+  const wantRecord = isChrome && o.record !== false;   // chrome records by default; --no-record disables
+
   const common = {
     target, port, host: o.host,
     breakpoints: o.bp, root: o.root, exprs: o.expr,
     steps: (o.steps || "").split(",").map((s) => s.trim()).filter(Boolean),
-    frames: o.frames, maxHits: o.maxHits, wsUrl: o.ws, record: !!o.record,
+    frames: o.frames, maxHits: o.maxHits, wsUrl: o.ws, record: wantRecord,
     ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
     args: { target, port, bp: o.bp, ...(o.curl ? { curl: o.curl } : {}), ...(o.url ? { url: o.url } : {}) },
   };
@@ -76,19 +80,29 @@ async function dynamicAction(o) {
     opts = { ...common, curl: o.curl };
   }
 
-  const { result, envelope } = await runDynamic(opts);
-  emit(envelope, () => renderTrace(result) + renderLineage(envelope.data.lineage), o);
+  const { result, envelope, sessionId } = await runDynamic(opts);
 
+  // Chrome debug-replay recording (on by default): render → upload to S3 → attach the LINK to the envelope,
+  // so stdout / --json / the collector all carry a URL, not a local path. Falls back to the local path when
+  // S3 isn't configured. Never fatal to the trace.
+  if (wantRecord) {
+    try {
+      const out = typeof o.record === "string" ? o.record : join(tmpdir(), `trace-${sessionId}.mp4`);
+      const mp4 = await renderVideo(result, { out });
+      if (!mp4) process.stderr.write("[trace] no hits — nothing to record\n");
+      else {
+        const up = await uploadFile(mp4, `recordings/${sessionId}.mp4`, "video/mp4");
+        envelope.data.recording = up ? { url: up.url, bytes: up.bytes } : { path: mp4 };
+        process.stderr.write(up ? `[trace] recording → ${up.url}\n`
+          : `[trace] recording → ${mp4} (set S3_ENDPOINT to upload + get a link)\n`);
+      }
+    } catch (e) { process.stderr.write(`[trace] recording failed: ${e.message}\n`); }
+  }
+
+  emit(envelope, () => renderTrace(result) + renderLineage(envelope.data.lineage), o);
   const collector = o.emit || process.env.TRACE_COLLECTOR_URL;
   if (collector) await emitEnvelope(collector, envelope);
 
-  if (o.record) {
-    if (!isChrome) process.stderr.write("[trace] --record is Chrome-only (use --chrome --url); skipping\n");
-    else try {
-      const mp4 = await renderVideo(result, { out: o.record });
-      process.stderr.write(mp4 ? `[trace] recording → ${mp4}\n` : `[trace] no hits — nothing to record\n`);
-    } catch (e) { process.stderr.write(`[trace] recording failed: ${e.message}\n`); }
-  }
   process.exit(result.fatal ? 1 : 0);
 }
 
@@ -122,7 +136,8 @@ function buildProgram() {
     .option("--emit <url>", "POST the envelope to a collector (env TRACE_COLLECTOR_URL); see `trace serve`")
     // chrome extras + escape hatches
     .option("--shot <png>", "chrome: write a screenshot to this path")
-    .option("--record <mp4>", "chrome: record a side-by-side debug-replay video")
+    .option("--record [path]", "chrome: record a debug-replay video (ON by default; uploads to S3 if S3_ENDPOINT set)")
+    .option("--no-record", "chrome: skip the default video recording")
     .option("--ws <url>", "explicit CDP WebSocket URL (node/chrome; skips target discovery)")
     .option("--check", "resolve + verify the first --bp binds, then exit (0 bound · 2 not)")
     .action(dynamicAction);

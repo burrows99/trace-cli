@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { makeEnvelope } from "../schema/envelope.js";
+import { s3Configured } from "../storage/s3.js";
 
 const pexec = promisify(execFile);
 
@@ -22,6 +23,7 @@ const TOOLS = [
   { name: "madge",       pillar: "static",   purpose: "static deps (JS/TS)",          cmd: "madge",   args: ["--version"] },
   { name: "otel-cli",    pillar: "runtime",  purpose: "exec spans (OTel)",            cmd: "otel-cli", args: ["--version"] },
   { name: "playwright",  pillar: "frontend", purpose: "web traces",                   cmd: "playwright", args: ["--version"] },
+  { name: "s3",          pillar: "storage",  purpose: "upload recordings (S3_ENDPOINT)", s3: true },
 ];
 
 // chromePath() → an installed Chrome/Chromium binary path, or null. Honors $CHROME_BIN.
@@ -37,6 +39,10 @@ export function chromePath() {
 }
 
 async function probe(t) {
+  if (t.s3) {
+    const ep = process.env.S3_ENDPOINT || process.env.AWS_S3_ENDPOINT;
+    return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: s3Configured(), version: ep || undefined };
+  }
   if (t.chrome) {
     const p = chromePath();
     return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: !!p, version: p || undefined };

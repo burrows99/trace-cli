@@ -52,8 +52,9 @@ debugpy.listen(("127.0.0.1", 5678))   # then serve as normal — trace-cli attac
 Shared flags: `--bp <file:line | file@substring>` (repeatable) · `--expr '<js/py>'` (repeatable, evaluated
 at every hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json [path]` (envelope to a file, or
 bare `--json` for JSON on stdout) · `--emit <url>` (POST to a collector) · `--check` (verify a bp binds, then
-exit). Chrome adds `--shot <png>` and `--record <out.mp4>`. `stdout` is the trace, `stderr` is `[trace]`
-logs; exit `0` ok · `1` runtime · `2` usage.
+exit). Chrome adds `--shot <png>`; it also **records a debug-replay video by default** (`--no-record` to
+skip) — uploaded to S3 if `S3_ENDPOINT` is set, with the link attached to the trace (`data.recording.url`),
+else kept as a local path. `stdout` is the trace, `stderr` is `[trace]` logs; exit `0` ok · `1` runtime · `2` usage.
 
 See installed tooling with `trace doctor`.
 
@@ -68,13 +69,16 @@ with `--emit`.
 trace serve --port 4747                 # → http://localhost:4747
 trace dynamic --node 9229 --bp app.js:42 --curl '…' --emit http://localhost:4747
 
-# as a Docker service (persists sessions to ./.trace-data)
-docker compose up --build               # → http://localhost:4747
+# as a Docker service: collector + UI + a mock-aws (S3) for recordings
+docker compose up --build               # → http://localhost:4747 (UI), :9000 (S3), :9001 (S3 console)
 # then, from the host where your debug target is reachable:
-trace dynamic --python 5678 --bp app.py:42 --curl '…' --emit http://localhost:4747
+export S3_ENDPOINT=http://localhost:9000
+trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9 --emit http://localhost:4747
 ```
 
-`TRACE_COLLECTOR_URL` works as a default for `--emit`. The collector API: `POST /v1/traces` (ingest),
+Chrome recordings upload to S3 (the `mock-aws` container locally; point `S3_ENDPOINT` at real AWS in prod —
+the code talks the S3 API via the AWS SDK, no change), and the video link rides along in the trace + plays
+in the UI. `TRACE_COLLECTOR_URL` works as a default for `--emit`. The collector API: `POST /v1/traces` (ingest),
 `GET /api/sessions`, `GET /api/sessions/:id`, `GET /api/stream` (SSE).
 
 ## The contract: one envelope

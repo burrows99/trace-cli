@@ -61,14 +61,33 @@
   .stack div { font-family: var(--mono); font-size: 11.5px; color: var(--muted); padding: 1px 0; }
   .stack div b { color: var(--text); font-weight: 500; }
   pre.resp { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11.5px; overflow-x: auto; margin: 0; }
-  .mutations { padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
-  .mutations > h4 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
-  .mrow { display: flex; align-items: baseline; gap: 12px; padding: 3px 0; font-family: var(--mono); font-size: 12px; }
-  .mname { color: var(--amber); min-width: 130px; }
-  .mpath { flex: 1; color: var(--muted); word-break: break-all; }
-  .mpath .chg { color: var(--text); }
-  .mpath .arr { color: var(--border); padding: 0 2px; }
+  .mutations { padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel2); border-left: 3px solid var(--accent); }
+  .mutations > h4 { margin: 0; font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: .5px; }
+  .mutations > .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 14px; margin: 6px 0 12px; font-size: 11px; color: var(--muted); }
+  .mutations > .legend .li { display: inline-flex; align-items: center; gap: 6px; }
+  .mutations > .legend .sep { width: 1px; align-self: stretch; background: var(--border); margin: 1px 2px; }
+  .mutations > .legend .sym { font-family: var(--mono); font-weight: 700; font-size: 13px; line-height: 1; }
+  .mutations > .legend .sym.expr { color: var(--accent); }
+  .mutations > .legend .sym.local { color: var(--amber); }
+  .mutations > .legend .arr { color: var(--accent); opacity: .6; font-family: var(--mono); font-weight: 700; }
+  .mutations > .legend .sw { font-family: var(--mono); padding: 1px 6px; border-radius: 3px; background: var(--bg); border: 1px solid var(--border); }
+  .mutations > .legend .sw.val { color: var(--muted); }
+  .mutations > .legend .sw.chg { color: var(--text); font-weight: 600; }
+  .mutations > .legend .sw.last { color: var(--green); font-weight: 600; }
+  .mrow { display: flex; align-items: baseline; gap: 12px; padding: 4px 0; font-family: var(--mono); font-size: 12.5px; }
+  .mname { min-width: 130px; font-weight: 600; white-space: nowrap; }
+  .mname.expr { color: var(--accent); } .mname.local { color: var(--amber); }
+  .mpath { flex: 1; word-break: break-all; }
+  .mpath .val { color: var(--muted); }
+  .mpath .chg { color: var(--text); font-weight: 600; }
+  .mpath .last { color: var(--green); font-weight: 600; }
+  .mpath .arr { color: var(--accent); opacity: .6; padding: 0 5px; }
   .mcount { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .recording { padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .recording > h4 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .recording video { max-width: 520px; width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #000; display: block; }
+  .recording .rlink { margin-top: 6px; font-family: var(--mono); font-size: 11px; word-break: break-all; }
+  .recording .rlink a { color: var(--accent); }
   .diag { font-size: 12px; padding: 6px 20px; }
   .diag.error { color: var(--red); } .diag.warn { color: var(--amber); }
   .diag.error::before { content: "✗ "; } .diag.warn::before { content: "⚠ "; }
@@ -127,19 +146,46 @@ function kvTable(obj) {
   return `<table class="kv">${ks.map((k) => `<tr><td class="k">${esc(k)}</td><td class="v">${esc(typeof obj[k] === "object" ? JSON.stringify(obj[k]) : obj[k])}</td></tr>`).join("")}</table>`;
 }
 
+function renderRecording(rec) {
+  if (!rec) return "";
+  if (rec.url) {
+    const kb = rec.bytes ? ` · ${Math.round(rec.bytes / 1024)} KB` : "";
+    return `<div class="recording"><h4>recording${kb}</h4>
+      <video controls preload="metadata" src="${esc(rec.url)}"></video>
+      <div class="rlink"><a href="${esc(rec.url)}" target="_blank">${esc(rec.url)}</a></div></div>`;
+  }
+  return `<div class="recording"><h4>recording (local)</h4>
+    <div class="rlink">${esc(rec.path)} <span style="color:var(--muted)">— set S3_ENDPOINT to get a shareable link</span></div></div>`;
+}
+
 function renderMutations(lineage) {
   if (!lineage || !lineage.length) return "";
   const fmt = (v) => esc(typeof v === "object" ? JSON.stringify(v) : v);
   const rows = lineage.map((tr) => {
-    const path = [];
-    tr.series.forEach((s, i) => { if (s.changed || i === 0) path.push(`<span class="${s.changed ? "chg" : ""}">${fmt(s.value)}</span>`); });
+    const steps = tr.series.filter((s, i) => s.changed || i === 0);
+    const path = steps.map((s, i) => {
+      const cls = i === steps.length - 1 ? "last" : s.changed ? "chg" : "val";
+      return `<span class="${cls}">${fmt(s.value)}</span>`;
+    });
+    const kind = tr.kind === "expr" ? "expr" : "local";
     return `<div class="mrow">
-      <span class="mname">${tr.kind === "expr" ? "⊢" : "•"} ${esc(tr.name)}</span>
+      <span class="mname ${kind}" title="${kind === "expr" ? "watched expression" : "local variable"}">${kind === "expr" ? "⊢" : "•"} ${esc(tr.name)}</span>
       <span class="mpath">${path.join('<span class="arr">→</span>')}</span>
-      <span class="mcount">${tr.changes} chg / ${tr.occurrences} hits</span>
+      <span class="mcount">${tr.changes} change${tr.changes === 1 ? "" : "s"} · ${tr.occurrences} hits</span>
     </div>`;
   }).join("");
-  return `<div class="mutations"><h4>mutations · how values changed as flow continued</h4>${rows}</div>`;
+  return `<div class="mutations">
+    <h4>lineage · how values mutated across hits</h4>
+    <div class="legend">
+      <span class="li"><span class="sym expr">⊢</span> watched expression</span>
+      <span class="li"><span class="sym local">•</span> local variable</span>
+      <span class="sep"></span>
+      <span class="li"><span class="sw val">9.99</span> initial / unchanged</span>
+      <span class="li"><span class="sw chg">14.49</span> changed at this hit</span>
+      <span class="li"><span class="sw last">16.49</span> final value</span>
+      <span class="li"><span class="arr">→</span> mutation step</span>
+    </div>
+    ${rows}</div>`;
 }
 
 function renderEvent(e) {
@@ -183,6 +229,7 @@ async function select(id) {
       ${t.trigger ? `<div class="trigger">${esc(t.trigger)}</div>` : ""}
     </div>
     ${(env.diagnostics || []).map((g) => `<div class="diag ${g.level}">${esc(g.message)}</div>`).join("")}
+    ${renderRecording(d.recording)}
     ${renderMutations(d.lineage)}
     <div class="events">${(d.events || []).map(renderEvent).join("") || '<div class="empty">no events</div>'}</div>
     ${extras.join("")}`;

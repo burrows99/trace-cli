@@ -151,6 +151,15 @@
         }
       }
     },
+    "Recording": {
+      "type": "object",
+      "description": "a trace artifact (e.g. the Chrome debug-replay video): a `url` when uploaded to S3, else a local `path`",
+      "properties": {
+        "url": { "type": "string" },
+        "path": { "type": "string" },
+        "bytes": { "type": "integer" }
+      }
+    },
     "Diagnostic": {
       "type": "object",
       "required": ["level", "code", "message"],
