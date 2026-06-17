@@ -7,3 +7,5 @@ npm-debug.log*
 .trace-data/
 .mock-aws-data/
 .DS_Store
+
+dist/
