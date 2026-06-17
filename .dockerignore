@@ -1,4 +1,7 @@
 node_modules
+ui/node_modules
+ui/.next
+ui/out
 npm-debug.log
 .git
 .gitignore

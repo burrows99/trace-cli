@@ -1,12 +1,54 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { createSessionStore } from "./createSessionStore.js";
 import type { SessionStore } from "./SessionStore.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const UI_PATH = join(here, "ui.html");
+// The Next.js static export (ui/out) is copied here by the build (see package.json `build`).
+const UI_DIR = join(here, "ui");
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".webp": "image/webp",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+/**
+ * Serve a file from the static export dir. Maps `/` → index.html, guards against path traversal,
+ * and falls back to index.html for extension-less paths (SPA routing). Returns false if nothing
+ * was served (missing asset / traversal), so the caller can 404.
+ */
+function serveStatic(res: ServerResponse, dir: string, pathname: string): boolean {
+  const rel = pathname === "/" ? "/index.html" : decodeURIComponent(pathname);
+  const root = resolve(dir);
+  let target = resolve(root, "." + rel);
+  if (target !== root && !target.startsWith(root + sep)) return false; // traversal
+  if (!existsSync(target) || !statSync(target).isFile()) {
+    if (extname(rel)) return false; // a real asset is missing → 404
+    target = join(root, "index.html"); // extension-less route → SPA fallback
+    if (!existsSync(target)) return false;
+  }
+  const ext = extname(target);
+  res.writeHead(200, {
+    "content-type": MIME[ext] ?? "application/octet-stream",
+    "cache-control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+  });
+  res.end(readFileSync(target));
+  return true;
+}
 
 /**
  * Collector — the trace collection service: ingests envelopes (POST /v1/traces), persists via a SessionStore
@@ -43,10 +85,6 @@ export class Collector {
 
       if (req.method === "OPTIONS") { res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type" }); return res.end(); }
 
-      if (req.method === "GET" && url.pathname === "/") {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        return res.end(readFileSync(UI_PATH, "utf8"));
-      }
       if (req.method === "GET" && url.pathname === "/api/sessions") return void store.list().then((l) => json(200, l)).catch((e) => json(500, { error: e.message }));
       if (req.method === "GET" && url.pathname.startsWith("/api/sessions/")) {
         const id = decodeURIComponent(url.pathname.slice("/api/sessions/".length));
@@ -74,6 +112,15 @@ export class Collector {
           } catch (e: any) { json(400, { error: e.message }); }
         });
         return;
+      }
+
+      // Everything else: serve the static Next.js UI (index.html + /_next/* assets).
+      if (req.method === "GET" || req.method === "HEAD") {
+        if (!existsSync(UI_DIR)) {
+          res.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
+          return res.end("trace UI not built. Run `npm run build` (builds ui/ → dist/collector/ui).\n");
+        }
+        if (serveStatic(res, UI_DIR, url.pathname)) return;
       }
 
       json(404, { error: "not found" });

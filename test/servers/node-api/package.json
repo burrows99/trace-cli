@@ -1,0 +1,4 @@
+{
+  "//": "Marks server.js as ES modules when run standalone (e.g. in the demo container, where the repo-root package.json isn't present). Matches the repo's own \"type\": \"module\".",
+  "type": "module"
+}

@@ -84,6 +84,17 @@ talks the S3 API via the AWS SDK, no change), and the video link rides along in 
 `TRACE_COLLECTOR_URL` works as a default for `--emit`. The collector API: `POST /v1/traces` (ingest),
 `GET /api/sessions`, `GET /api/sessions/:id`, `GET /api/stream` (SSE).
 
+The web UI is a **Next.js app** (App Router, static export) that lives in [`ui/`](ui/) as a self-contained
+sub-project. `npm run build` static-exports it (`output: 'export'` → `ui/out`) and copies the result into
+`dist/collector/ui`, which the collector serves at `/` alongside the API above — so `trace serve` stays a
+single process with no extra port. To iterate on the UI with hot reload, run the collector for data and the
+Next dev server for the UI:
+
+```bash
+trace serve --port 4000        # collector + API (data source)
+npm run dev:ui                 # Next.js dev → http://localhost:3000 (reads :4000 via ui/.env.development)
+```
+
 ## The contract: one envelope
 
 Every subcommand emits the same envelope; only `data` varies, built from shared shapes

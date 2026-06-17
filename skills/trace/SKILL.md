@@ -21,6 +21,16 @@ Run the bundled binary by its **explicit install path** — Claude substitutes `
 trace="node ${CLAUDE_PLUGIN_ROOT}/bin/trace"
 ```
 
+## The flags & subcommands describe themselves — read them from the binary
+The complete, **always-current** set of commands, flags and arguments is generated from the CLI itself, so it
+can't drift from the installed version. Don't rely on this doc for the exact flag list — ask the binary:
+```bash
+$trace manifest            # structured JSON: every command, flag (with defaults/choices/env vars) & argument
+$trace <command> --help    # human help for one command, e.g. `$trace dynamic --help`
+```
+Use `manifest` when you want to reason over the options programmatically, `--help` for a quick look.
+**Everything below is an illustrative mental model; `$trace manifest` is the source of truth for exact flags.**
+
 ## Usage
 ```bash
 # Node (CDP) — trigger is a curl run after the breakpoints bind
@@ -47,14 +57,15 @@ $trace dynamic --chrome 9222 --url http://localhost:3000/some/route --bp src/pag
 (Node/Chrome via source maps; Python directly against the `.py`), so a short relative path works; resolve
 relative files with `--root <dir>` (defaults to cwd). Use `--check` to verify one binds without tracing.
 
-**Shared flags**: `--expr '<js/py>'` (repeatable; evaluated at every hit) · `--steps over,into,out`
-(Node/Chrome) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json [path]` (envelope to a file, or
-bare `--json` for JSON on stdout) · `--emit <url>` (POST the envelope to a `trace serve` collector; or set
+**Common flags** (run `$trace manifest` for the full, current set): `--expr '<js/py>'` (repeatable; evaluated
+at every hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json [path]` (envelope to a file, or bare
+`--json` for JSON on stdout) · `--emit <url>` (POST the envelope to a `trace serve` collector; or set
 `TRACE_COLLECTOR_URL`) · Chrome: `--shot <png>`, **`--record <out.mp4>`**.
 
 ## Other subcommands
+`$trace manifest` lists them all with their current flags; the ones you'll reach for:
 - `$trace doctor` — which backing tools are installed (node, python3, debugpy, chrome, ffmpeg, …).
-- `$trace schema` — the output JSON Schema (the contract).
+- `$trace schema` — the output JSON Schema (the **output** contract); `$trace manifest` is the **input** contract.
 - `$trace serve --port 4747` — a collector + **realtime web UI** of all traces (Langfuse-style). Run it,
   then add `--emit http://localhost:4747` to any trace. Also runnable as a Docker service (`docker compose up`).
 

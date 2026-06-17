@@ -25,10 +25,13 @@
   },
   "scripts": {
     "trace": "node bin/trace",
-    "build": "tsc && cp src/collector/ui.html dist/collector/ui.html && cp src/shared/trace.schema.json dist/shared/trace.schema.json",
+    "build": "npm run build:cli && npm run build:ui",
+    "build:cli": "tsc && cp src/shared/trace.schema.json dist/shared/trace.schema.json",
+    "build:ui": "npm --prefix ui install && npm --prefix ui run build && rm -rf dist/collector/ui && cp -R ui/out dist/collector/ui",
+    "dev:ui": "npm --prefix ui run dev",
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
-    "test": "npm run build && node --test test/*.test.js"
+    "test": "npm run build:cli && node --test test/*.test.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1071.0",

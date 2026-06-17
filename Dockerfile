@@ -19,11 +19,14 @@ COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci --ignore-scripts
 
 # App source (only what the CLI/collector needs — test fixtures are excluded via .dockerignore).
+# `ui` is the Next.js source for the realtime UI; the build installs its deps and static-exports it.
 COPY bin ./bin
 COPY src ./src
+COPY ui ./ui
 COPY README.md LICENSE ./
 
-# Compile the TypeScript (class-first build) → dist/, which bin/trace runs.
+# Compile the TypeScript (class-first build) → dist/, plus build the Next.js UI (static export)
+# into dist/collector/ui, which the collector serves. bin/trace runs the compiled output.
 RUN npm run build
 
 RUN chown -R node:node /app
