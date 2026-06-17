@@ -23,7 +23,7 @@
   },
   "scripts": {
     "trace": "node bin/trace",
-    "build": "tsc",
+    "build": "tsc && cp src/collector/ui.html dist/collector/ui.html && cp src/shared/trace.schema.json dist/shared/trace.schema.json",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.js"
   },

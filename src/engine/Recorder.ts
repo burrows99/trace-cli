@@ -1,0 +1,141 @@
+import { execFile, spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CdpDriver } from "../transport/CdpDriver.js";
+import type { CaptureResult } from "./Tracer.js";
+import type { TraceEvent } from "../domain/TraceEvent.js";
+
+const OW = 1360, OH = 860;
+const CHROME_CANDIDATES = [
+  process.env.CHROME_BIN,
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
+].filter(Boolean) as string[];
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const oneLine = (v: unknown) => { const s = typeof v === "string" ? v : JSON.stringify(v); return (s == null ? String(v) : s).replace(/\s+/g, " ").slice(0, 240); };
+const locStr = (e: TraceEvent) => (e.loc ? `${e.loc.file}:${e.loc.line ?? ""}` : "");
+const attrsOf = (e: TraceEvent) => (e.attrs ?? {}) as { cls?: string; stack?: string[]; locals?: Record<string, unknown>; exprs?: Record<string, unknown> };
+
+const STYLE = `*{margin:0;box-sizing:border-box}
+html,body{width:${OW}px;height:${OH}px;background:#0b1220;color:#e6edf3;font:14px/1.55 ui-monospace,Menlo,Consolas,monospace;overflow:hidden}
+.root{display:flex;flex-direction:column;height:100%}
+.row{display:flex;flex:1;min-height:0}
+.left{width:46%;background:#06080f;display:flex;align-items:center;justify-content:center;border-right:2px solid #1b2740;overflow:hidden}
+.app{max-width:100%;max-height:100%;object-fit:contain}
+.req{align-self:stretch;width:100%;padding:20px;overflow:hidden}
+.panel{flex:1;padding:18px 22px;overflow:hidden}
+.hdr{font-size:19px;font-weight:700;color:#7ee787}
+.loc{color:#79c0ff;margin-bottom:10px}
+.sec{color:#8b949e;margin:12px 0 4px;text-transform:uppercase;font-size:11px;letter-spacing:.06em}
+.fr{color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kv{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k{color:#ffa657}.v{color:#a5d6ff}.expr .k{color:#d2a8ff}
+.cap{background:#101828;border-top:3px solid #44646b;padding:15px 22px;font-size:18px;font-weight:600;text-align:center;color:#fff;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.h{color:#7ee787;font-weight:700;margin-bottom:6px}
+pre{white-space:pre-wrap;word-break:break-all;color:#9de0ad;font-size:12px}`;
+
+/** Recorder — renders a CaptureResult into a side-by-side debug-replay mp4 (Chrome frame render + ffmpeg). */
+export class Recorder {
+  /** word-wrap a line (kept for tests / non-HTML callers). */
+  static wrap(line: string, width: number): string[] {
+    const out: string[] = [];
+    let s = String(line);
+    while (s.length > width) { let cut = s.lastIndexOf(" ", width); if (cut <= 0) cut = width; out.push(s.slice(0, cut)); s = s.slice(cut).replace(/^ /, ""); }
+    out.push(s);
+    return out;
+  }
+
+  /** the ffmpeg concat-demuxer list (frame 0 uses titleSecs when truthy; last frame repeated to flush). */
+  static concatList(frames: string[], stepSecs: number, titleSecs: number): string {
+    const lines: string[] = [];
+    frames.forEach((f, idx) => lines.push(`file '${f}'`, `duration ${idx === 0 && titleSecs ? titleSecs : stepSecs}`));
+    if (frames.length) lines.push(`file '${frames[frames.length - 1]}'`);
+    return lines.join("\n") + "\n";
+  }
+
+  static #caption(e: TraceEvent): string {
+    const a = attrsOf(e);
+    return `#${e.seq}  ${a.cls ? a.cls + "." : ""}${e.label}  ${locStr(e)}${String(e.kind).startsWith("step") ? "  [" + e.kind + "]" : ""}`;
+  }
+
+  static #frameHtml(result: CaptureResult, e: TraceEvent): string {
+    const a = attrsOf(e);
+    const left = result.finalShot
+      ? `<img class=app src="data:image/png;base64,${result.finalShot}">`
+      : `<div class=req><div class=h>(no app screenshot)</div></div>`;
+    const stack = (a.stack || []).map((f) => `<div class=fr>${esc(f)}</div>`).join("");
+    const locals = Object.entries(a.locals || {}).map(([k, v]) => `<div class=kv><span class=k>${esc(k)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
+    const exprs = Object.entries(a.exprs || {}).map(([ex, v]) => `<div class="kv expr">⊢ <span class=k>${esc(ex)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
+    return `<!doctype html><meta charset=utf8><style>${STYLE}</style><div class=root>
+      <div class=row><div class=left>${left}</div><div class=panel>
+        <div class=hdr>#${e.seq} &nbsp; +${e.t}ms</div>
+        <div class=loc>${esc((a.cls ? a.cls + "." : "") + e.label)} &nbsp;@ ${esc(locStr(e))}</div>
+        <div class=sec>stack</div>${stack}
+        ${locals ? `<div class=sec>locals</div>${locals}` : ""}
+        ${exprs ? `<div class=sec>watch</div>${exprs}` : ""}
+      </div></div>
+      <div class=cap>${esc(Recorder.#caption(e))}</div>
+    </div>`;
+  }
+
+  static #titleHtml(title: string): string {
+    return `<!doctype html><meta charset=utf8><style>${STYLE}
+.title{display:flex;align-items:center;justify-content:center;height:100%;font:600 34px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;text-align:center;padding:0 60px}</style>
+<div class=title>${esc(title)}</div>`;
+  }
+
+  static #ffmpeg(args: string[]): Promise<void> {
+    return new Promise((res, rej) => {
+      execFile("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args], (err: any, _o, stderr) => (err ? rej(new Error(stderr || err.message)) : res()));
+    });
+  }
+
+  static async #launchRenderChrome(): Promise<{ port: number; kill(): void }> {
+    const bin = CHROME_CANDIDATES.find((p) => existsSync(p));
+    if (!bin) throw new Error("no Chrome found for frame rendering (set CHROME_BIN)");
+    const port = 9700 + (process.pid % 250);
+    const profile = mkdtempSync(join(tmpdir(), "trace-render-profile-"));
+    const proc = spawn(bin, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--force-device-scale-factor=1", "about:blank"], { stdio: "ignore" });
+    for (let i = 0; i < 60; i++) { try { await (await fetch(`http://localhost:${port}/json/version`)).json(); break; } catch { await sleep(100); } }
+    return { port, kill() { try { proc.kill("SIGKILL"); } catch { /* ignore */ } try { rmSync(profile, { recursive: true, force: true }); } catch { /* ignore */ } } };
+  }
+
+  static async #renderFrame(driver: CdpDriver, html: string, out: string): Promise<void> {
+    await driver.send("Page.navigate", { url: "data:text/html;base64," + Buffer.from(html).toString("base64") });
+    await sleep(280);
+    const s = await driver.send("Page.captureScreenshot", { format: "png" });
+    writeFileSync(out, Buffer.from(s.data, "base64"));
+  }
+
+  static async render(result: CaptureResult, opts: { out: string; stepSecs?: number; title?: string; titleSecs?: number }): Promise<string | null> {
+    const { out, stepSecs = 3, title, titleSecs = 2.5 } = opts;
+    if (!result.events?.length) return null;
+    const dir = mkdtempSync(join(tmpdir(), "trace-rec-"));
+    const chrome = await Recorder.#launchRenderChrome();
+    let driver: CdpDriver | undefined;
+    try {
+      const targets = await (await fetch(`http://localhost:${chrome.port}/json`)).json() as any[];
+      const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl) || targets[0];
+      if (!page?.webSocketDebuggerUrl) throw new Error("render Chrome exposed no page target");
+      driver = await CdpDriver.connect(page.webSocketDebuggerUrl);
+      await driver.send("Page.enable");
+      await driver.send("Emulation.setDeviceMetricsOverride", { width: OW, height: OH, deviceScaleFactor: 1, mobile: false });
+      const frames: string[] = [];
+      if (title) { const f = join(dir, "frame_0.png"); await Recorder.#renderFrame(driver, Recorder.#titleHtml(title), f); frames.push(f); }
+      let i = 1;
+      for (const e of result.events) { const f = join(dir, `frame_${i}.png`); await Recorder.#renderFrame(driver, Recorder.#frameHtml(result, e), f); frames.push(f); i++; }
+      const listFile = join(dir, "frames.txt");
+      writeFileSync(listFile, Recorder.concatList(frames, stepSecs, title ? titleSecs : 0));
+      await Recorder.#ffmpeg(["-f", "concat", "-safe", "0", "-i", listFile, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out]);
+      return out;
+    } finally {
+      try { driver?.close(); } catch { /* ignore */ }
+      chrome.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
