@@ -146,7 +146,17 @@ trace dynamic --node 9230 --curl 'curl -s "http://127.0.0.1:3100/price?qty=3&cod
 PORT=3101 DEBUG_PORT=5679 python3 test/servers/python-api/server.py &
 trace dynamic --python 5679 --curl 'curl -s "http://127.0.0.1:3101/price?qty=3&code=SAVE10"' \
   --bp "test/servers/python-api/server.py@total = subtotal" --expr rate
+
+# React (Chrome / CDP) — same logic, traced on the frontend through Vite source maps
+cd test/servers/react-app && npm install && npm run dev &     # serves :5180
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --remote-debugging-port=9334 --user-data-dir=/tmp/chrome about:blank &
+trace dynamic --chrome 9334 --url http://localhost:5180 --root test/servers/react-app \
+  --bp "src/price.ts@total = subtotal" --expr qty --expr code
 ```
+
+All three emit the same envelope shape; add `--emit http://localhost:4747` to any of them to watch them
+land live in the `trace serve` UI.
 
 ## Roadmap
 

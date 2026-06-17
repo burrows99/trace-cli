@@ -121,19 +121,21 @@ async function tryMapScript(client, scriptId, s, file, line) {
 }
 
 export async function findGenerated(client, file, line) {
-  // 1) DIRECT: a loaded script IS the file (plain JS, or a runtime running the source directly)
+  const bn = baseNoExt(file);
+  const all = [...client.scripts()];
+  // 1) MAPPED (fast): a loaded script whose basename matches AND whose source map lists `file` as a source.
+  //    Tried BEFORE direct so that transformed code served at the SOURCE url — e.g. a Vite dev server
+  //    serving TS/TSX at the `.ts`/`.tsx` path with an inline source map — resolves through the map instead
+  //    of being treated as plain JS at the raw line (which would mis-place or fail to bind the breakpoint).
+  const primary = all.filter(([, s]) => s.url && baseNoExt(s.url) === bn);
+  for (const [scriptId, s] of primary) { const r = await tryMapScript(client, scriptId, s, file, line); if (r) return r; }
+  // 2) DIRECT: a loaded script IS the file (plain JS, or a runtime executing the source directly, no map).
   for (const [, s] of client.scripts()) {
     if (s.url && suffixMatch(s.url, file)) {
       return { urlRegex: urlRegexFor(s.url), lineNumber: line - 1, columnNumber: 0, scriptUrl: s.url, mapped: false };
     }
   }
-  // 2) MAPPED (fast): only scripts whose basename matches the file's (e.g. x.ts → x.js) — avoids loading
-  //    every source map in the target.
-  const bn = baseNoExt(file);
-  const all = [...client.scripts()];
-  const primary = all.filter(([, s]) => s.url && baseNoExt(s.url) === bn);
-  for (const [scriptId, s] of primary) { const r = await tryMapScript(client, scriptId, s, file, line); if (r) return r; }
-  // 3) MAPPED (fallback): any remaining script whose source map lists the file as a source.
+  // 3) MAPPED (fallback): any remaining script whose source map lists `file` as a source.
   const seen = new Set(primary.map(([id]) => id));
   for (const [scriptId, s] of all) { if (seen.has(scriptId)) continue; const r = await tryMapScript(client, scriptId, s, file, line); if (r) return r; }
   return null;

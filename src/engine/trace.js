@@ -187,6 +187,10 @@ export async function traceChrome(opts = {}) {
   client.on("Runtime.consoleAPICalled", (p) => { if (["error", "warning"].includes(p.type)) result.console.push({ type: p.type, text: (p.args || []).map((a) => a.value ?? a.description ?? a.type).join(" ").slice(0, 300) }); });
   client.on("Runtime.exceptionThrown", (p) => result.console.push({ type: "exception", text: String(p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || "").split("\n")[0].slice(0, 300) }));
   client.on("Network.responseReceived", (p) => { const r = p.response; if (r && r.status >= 400) result.network.push({ status: r.status, url: r.url }); });
+  let loaded = false;   // the reload's load event ≈ "trigger done". Don't interrupt immediately — with ESM
+  // (Vite) a breakpoint can fire just AFTER load as modules finish executing — give a short grace, then
+  // stop instead of waiting out the full timeout.
+  client.on("Page.loadEventFired", () => { loaded = true; setTimeout(() => client.interrupt(), 1000); });
   try {
     await client.send("Runtime.enable");
     await client.send("Debugger.enable");
@@ -202,15 +206,18 @@ export async function traceChrome(opts = {}) {
     ctx.bpById = bpById; result.breakpoints = report;
 
     ctx.t0 = performance.now();
+    loaded = false;                       // ignore the initial navigate's load; only the reload counts
     log("reloading (trigger)");
     client.send("Page.reload", {}).catch(() => {});
 
     while (result.hits.length < maxHits) {
       let paused;
       try { paused = await client.waitForPaused(timeoutMs); } catch { break; }
+      if (!paused) break;                 // interrupted by the load event — no more pauses coming
       result.hits.push(await capture(client, paused, "breakpoint", ctx));
       await runSteps(client, ctx, timeoutMs);
       await client.send("Debugger.resume").catch(() => {});
+      if (loaded && !client.hasQueued()) break;
     }
     // breakpoints freeze the page BEFORE paint, so per-hit screenshots are blank. Capture the
     // fully-rendered page AFTER the run resumes + settles, and use it as the recording's app pane.
