@@ -7,6 +7,7 @@ import { writeFileSync } from "node:fs";
 import { traceNode, traceChrome, checkBreakpoint } from "./trace.js";
 import { parseBpSpec } from "./breakpoints.js";
 import { renderTrace } from "./render.js";
+import { renderVideo } from "./record.js";
 
 const int = (v) => parseInt(v, 10);
 const collect = (v, acc) => { acc.push(v); return acc; };
@@ -15,7 +16,7 @@ function buildProgram() {
   return new Command()
     .name("trace")
     .description("Execution tracer over the Chrome DevTools Protocol — breakpoints + a trigger → a full trace.")
-    .version("0.1.1")
+    .version("0.2.0")
     .option("--port <n>", "Node --inspect port (Node target; default 9229)", int)
     .option("--chrome <n>", "Chrome --remote-debugging-port (selects the Chrome target)", int)
     .option("--curl <cmd>", "Node trigger: a curl command run once breakpoints are set")
@@ -29,6 +30,9 @@ function buildProgram() {
     .option("--timeout-ms <n>", "per-pause wait timeout", int)
     .option("--req-timeout-ms <n>", "curl trigger timeout, Node target", int, 60000)
     .option("--shot <png>", "Chrome: write a screenshot to this path")
+    .option("--record <mp4>", "record a side-by-side debug-replay video (app | trace + captions)")
+    .option("--step-secs <n>", "seconds to hold each hit in the recording", parseFloat, 3)
+    .option("--title <text>", "intro/title caption for the recording")
     .option("--json <path>", "write the machine-readable trace JSON")
     .option("--ws <url>", "connect to an explicit CDP WebSocket URL (advanced; skips discovery)")
     .option("--url-match <s>", "pick the target whose URL contains this substring")
@@ -42,6 +46,7 @@ function commonOpts(o) {
     breakpoints: o.bp, root: o.root, exprs: o.expr,
     steps: (o.steps || "").split(",").map((s) => s.trim()).filter(Boolean),
     frames: o.frames, maxHits: o.maxHits, wsUrl: o.ws, urlMatch: o.urlMatch, titleMatch: o.titleMatch,
+    record: !!o.record,
     ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
   };
 }
@@ -86,6 +91,12 @@ export async function run(argv = process.argv) {
     if (o.json) writeFileSync(o.json, JSON.stringify(result, null, 2));
     process.stdout.write(renderTrace(result) + "\n");
     if (o.json) process.stderr.write(`[trace] full JSON → ${o.json}\n`);
+    if (o.record) {
+      try {
+        const mp4 = await renderVideo(result, { out: o.record, stepSecs: o.stepSecs, title: o.title });
+        process.stderr.write(mp4 ? `[trace] recording → ${mp4}\n` : `[trace] no hits — nothing to record\n`);
+      } catch (e) { process.stderr.write(`[trace] recording failed: ${e.message}\n`); }
+    }
     process.exit(result.fatal ? 1 : 0);
   } catch (e) {
     process.stderr.write(`trace: ${e?.message || e}\n`);

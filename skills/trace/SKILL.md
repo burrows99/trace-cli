@@ -31,6 +31,10 @@ $trace --port 9229 \
 # Chrome target — trigger is navigating to the route + reloading
 $trace --chrome 9222 --url http://localhost:3000/some/route \
   --bp src/pages/Thing.tsx:42 --shot /tmp/thing.png
+
+# Record a side-by-side debug-replay video: [ app | trace panel ] + captions, one held frame per hit
+$trace --chrome 9222 --url http://localhost:3000/some/route --bp src/pages/Thing.tsx:42 \
+  --record /tmp/replay.mp4 --title "What renders Thing" --step-secs 3
 ```
 
 **Breakpoints** (`--bp`, repeatable): `file:line` or `file@substring`. `file` is matched to the target's
@@ -39,7 +43,16 @@ substrings with `--root <dir>` (defaults to cwd). Use `--check` to verify one bi
 
 **Shared flags**: `--expr '<js>'` (repeatable; evaluated at every hit) · `--steps over,into,out` (step plan
 at the first hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json <path>` · `--timeout-ms N` ·
-`--shot <png>` (Chrome) · `--ws <url>` / `--url-match` / `--title-match` (pick a specific target).
+`--shot <png>` (Chrome) · `--ws <url>` / `--url-match` / `--title-match` (pick a specific target) ·
+**`--record <out.mp4>`** + `--step-secs <n>` + `--title <text>` (record a debug-replay video).
+
+## Recording (`--record`)
+Each breakpoint hit becomes one **side-by-side frame** — left: the app screenshot (Chrome) or the
+request/response (Node); right: the trace panel (stack · locals · watched exprs); bottom: a caption — held
+`--step-secs` seconds, then all frames are assembled into an mp4. Frames are rendered as HTML in a throwaway
+headless Chrome (so it needs a **Chrome binary**, `$CHROME_BIN` to override) and stitched with **ffmpeg**.
+Because a breakpoint **freezes the page**, a Chrome frame shows the app *paused at that line* (often
+mid-render) — the value is the synchronized app+state pairing, not a smooth playthrough.
 
 `stdout` is the trace, `stderr` is `[trace]` progress; exit `0` ok · `1` runtime error · `2` usage error
 (`--check`: `0` bound · `2` not bound).

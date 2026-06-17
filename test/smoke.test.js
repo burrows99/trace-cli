@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseBpSpec, parseBreakpoints, suffixMatch, pathOf, urlRegexFor } from "../src/index.js";
+import { parseBpSpec, parseBreakpoints, suffixMatch, pathOf, urlRegexFor, wrap, concatList } from "../src/index.js";
 
 test("parseBpSpec splits file:line, and prefers @ for colon-bearing substrings", () => {
   assert.deepEqual(parseBpSpec("src/a.ts:149"), { file: "src/a.ts", lineSpec: "149" });
@@ -43,4 +43,16 @@ test("parseBreakpoints: numeric + substring against disk; errors on missing/ambi
     assert.throws(() => parseBreakpoints(["f.ts@nope"], root), /no line/);
     assert.throws(() => parseBreakpoints(["missing.ts@x"], root), /not readable/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("wrap breaks long lines at word boundaries within width", () => {
+  assert.deepEqual(wrap("the quick brown fox jumps", 9), ["the quick", "brown fox", "jumps"]);
+  assert.deepEqual(wrap("short", 9), ["short"]);
+});
+
+test("concatList lists each frame with a duration and repeats the last (concat-demuxer flush)", () => {
+  assert.equal(
+    concatList(["a.png", "b.png"], 3, 2),
+    "file 'a.png'\nduration 2\nfile 'b.png'\nduration 3\nfile 'b.png'\n",
+  );
 });

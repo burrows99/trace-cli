@@ -12,3 +12,4 @@ export {
 } from "./sourcemaps.js";
 export { parseBpSpec, parseBreakpoints, resolveLine } from "./breakpoints.js";
 export { renderTrace } from "./render.js";
+export { renderVideo, concatList, wrap } from "./record.js";

@@ -1,7 +1,7 @@
 {
   "name": "trace",
   "description": "General-purpose execution tracer over the Chrome DevTools Protocol: set breakpoints, fire a trigger (a curl command, or a Chrome navigation), and get a full execution trace. Ships the `trace` CLI + a usage skill. Usable by any agent.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": {
     "name": "Raunak Burrows"
   },

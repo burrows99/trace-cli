@@ -13,6 +13,11 @@ import { parseBreakpoints } from "./breakpoints.js";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stamp = () => new Date().toISOString();
 
+// snap(client): base64 PNG of the page (works while paused at a breakpoint). null on failure.
+async function snap(client) {
+  try { return (await client.send("Page.captureScreenshot", { format: "png" })).data; } catch { return null; }
+}
+
 // settleScripts: after Debugger.enable the target replays scriptParsed for already-loaded scripts;
 // wait until the count stops growing so source-map resolution sees everything.
 async function settleScripts(client, ms = 1500) {
@@ -83,7 +88,7 @@ async function capture(client, paused, kind, ctx) {
   };
 }
 
-async function runSteps(client, ctx, timeoutMs) {
+async function runSteps(client, ctx, timeoutMs, record = false) {
   if (ctx.hits.length !== 1 || !ctx.steps.length) return;
   for (const s of ctx.steps) {
     const cmd = { over: "Debugger.stepOver", into: "Debugger.stepInto", out: "Debugger.stepOut" }[s];
@@ -91,7 +96,9 @@ async function runSteps(client, ctx, timeoutMs) {
     await client.send(cmd);
     let st;
     try { st = await client.waitForPaused(timeoutMs); } catch { break; }
-    ctx.hits.push(await capture(client, st, `step:${s}`, ctx));
+    const h = await capture(client, st, `step:${s}`, ctx);
+    if (record) h.shot = await snap(client);
+    ctx.hits.push(h);
   }
 }
 
@@ -167,7 +174,7 @@ export async function traceChrome(opts = {}) {
   const {
     port = 9222, wsUrl, url, breakpoints = [], root,
     exprs = [], steps = [], frames = 6, maxHits = 25,
-    timeoutMs = 15000, waitMs = 3500, shot, urlMatch,
+    timeoutMs = 15000, waitMs = 3500, shot, urlMatch, record = false,
   } = opts;
   if (!url) throw new Error("traceChrome requires a page url");
   setRoot(root);
@@ -200,8 +207,10 @@ export async function traceChrome(opts = {}) {
     while (result.hits.length < maxHits) {
       let paused;
       try { paused = await client.waitForPaused(timeoutMs); } catch { break; }
-      result.hits.push(await capture(client, paused, "breakpoint", ctx));
-      await runSteps(client, ctx, timeoutMs);
+      const hit = await capture(client, paused, "breakpoint", ctx);
+      if (record) hit.shot = await snap(client);
+      result.hits.push(hit);
+      await runSteps(client, ctx, timeoutMs, record);
       await client.send("Debugger.resume").catch(() => {});
     }
     await sleep(1500);
