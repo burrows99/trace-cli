@@ -1,6 +1,6 @@
 {
   "name": "trace-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "General-purpose execution tracer over the Chrome DevTools Protocol — set breakpoints, fire a trigger, get a full execution trace. Works against a Node inspector or a Chrome page. Usable by any agent, human, or script.",
   "type": "module",
   "bin": {

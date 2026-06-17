@@ -16,7 +16,7 @@ function buildProgram() {
   return new Command()
     .name("trace")
     .description("Execution tracer over the Chrome DevTools Protocol — breakpoints + a trigger → a full trace.")
-    .version("0.2.0")
+    .version("0.2.1")
     .option("--port <n>", "Node --inspect port (Node target; default 9229)", int)
     .option("--chrome <n>", "Chrome --remote-debugging-port (selects the Chrome target)", int)
     .option("--curl <cmd>", "Node trigger: a curl command run once breakpoints are set")
@@ -92,10 +92,14 @@ export async function run(argv = process.argv) {
     process.stdout.write(renderTrace(result) + "\n");
     if (o.json) process.stderr.write(`[trace] full JSON → ${o.json}\n`);
     if (o.record) {
-      try {
-        const mp4 = await renderVideo(result, { out: o.record, stepSecs: o.stepSecs, title: o.title });
-        process.stderr.write(mp4 ? `[trace] recording → ${mp4}\n` : `[trace] no hits — nothing to record\n`);
-      } catch (e) { process.stderr.write(`[trace] recording failed: ${e.message}\n`); }
+      if (!isChrome) {
+        process.stderr.write("[trace] --record is Chrome-only (use --chrome --url); the Node target has no screen to record — skipping\n");
+      } else {
+        try {
+          const mp4 = await renderVideo(result, { out: o.record, stepSecs: o.stepSecs, title: o.title });
+          process.stderr.write(mp4 ? `[trace] recording → ${mp4}\n` : `[trace] no hits — nothing to record\n`);
+        } catch (e) { process.stderr.write(`[trace] recording failed: ${e.message}\n`); }
+      }
     }
     process.exit(result.fatal ? 1 : 0);
   } catch (e) {

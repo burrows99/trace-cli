@@ -31,16 +31,17 @@ trace --chrome 9222 --url http://localhost:3000/some/route \
 Shared flags: `--expr '<js>'` (repeatable; evaluated at every hit) · `--steps over,into,out` (step plan at
 the first hit) · `--frames N` · `--max-hits N` · `--root <dir>` (resolve relative `--bp` files) ·
 `--json <path>` (write the machine-readable trace) · `--timeout-ms N` · `--shot <png>` (Chrome screenshot) ·
-`--record <out.mp4>` + `--step-secs <n>` + `--title <text>` (record a side-by-side debug-replay video) ·
+`--record <out.mp4>` + `--step-secs <n>` + `--title <text>` (Chrome-only: record a debug-replay video) ·
 `--check` (resolve + verify a breakpoint binds, then exit). `stdout` is the trace, `stderr` is `[trace]`
 logs; exit `0` ok · `1` runtime error · `2` usage error.
 
-### Recording (`--record`)
-Each breakpoint hit → one **side-by-side frame** [ app screenshot (or request/response, for Node) | trace
-panel ] with a caption, held `--step-secs`, assembled into an mp4. Frames are rendered as HTML in a
-throwaway headless Chrome (needs a Chrome binary; `$CHROME_BIN` to override) and stitched with **ffmpeg**.
-Breakpoints freeze the page, so a Chrome frame shows the app *paused at that line* — synchronized state, not
-a smooth playthrough.
+### Recording (`--record`) — Chrome target only
+Makes a side-by-side **debug-replay** video: **left** = the app's fully-rendered screen, **right** = each
+hit's trace panel (stack · locals · exprs), **bottom** = a caption. One frame per hit, held `--step-secs`,
+stitched into an mp4. The left pane is captured *after the run resumes and settles* — the real rendered
+screen, not the blank mid-render frame a paused breakpoint would show — so the same screen appears on every
+frame while the trace panel advances. Frames render as HTML in a throwaway headless Chrome (needs a Chrome
+binary; `$CHROME_BIN` to override) + **ffmpeg**. Ignored on the Node (`--port`) target (no screen).
 
 ## As a library
 

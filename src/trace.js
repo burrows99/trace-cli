@@ -88,7 +88,7 @@ async function capture(client, paused, kind, ctx) {
   };
 }
 
-async function runSteps(client, ctx, timeoutMs, record = false) {
+async function runSteps(client, ctx, timeoutMs) {
   if (ctx.hits.length !== 1 || !ctx.steps.length) return;
   for (const s of ctx.steps) {
     const cmd = { over: "Debugger.stepOver", into: "Debugger.stepInto", out: "Debugger.stepOut" }[s];
@@ -96,9 +96,7 @@ async function runSteps(client, ctx, timeoutMs, record = false) {
     await client.send(cmd);
     let st;
     try { st = await client.waitForPaused(timeoutMs); } catch { break; }
-    const h = await capture(client, st, `step:${s}`, ctx);
-    if (record) h.shot = await snap(client);
-    ctx.hits.push(h);
+    ctx.hits.push(await capture(client, st, `step:${s}`, ctx));
   }
 }
 
@@ -207,15 +205,19 @@ export async function traceChrome(opts = {}) {
     while (result.hits.length < maxHits) {
       let paused;
       try { paused = await client.waitForPaused(timeoutMs); } catch { break; }
-      const hit = await capture(client, paused, "breakpoint", ctx);
-      if (record) hit.shot = await snap(client);
-      result.hits.push(hit);
-      await runSteps(client, ctx, timeoutMs, record);
+      result.hits.push(await capture(client, paused, "breakpoint", ctx));
+      await runSteps(client, ctx, timeoutMs);
       await client.send("Debugger.resume").catch(() => {});
     }
+    // breakpoints freeze the page BEFORE paint, so per-hit screenshots are blank. Capture the
+    // fully-rendered page AFTER the run resumes + settles, and use it as the recording's app pane.
+    await client.send("Debugger.resume").catch(() => {});
     await sleep(1500);
     try { const u = await client.send("Runtime.evaluate", { expression: "location.href", returnByValue: true }); result.finalUrl = u.result?.value; } catch {}
-    if (shot) { try { const s = await client.send("Page.captureScreenshot", { format: "png" }); writeFileSync(shot, Buffer.from(s.data, "base64")); result.screenshot = shot; } catch {} }
+    if (shot || record) {
+      const data = await snap(client);
+      if (data) { if (record) result.finalShot = data; if (shot) { writeFileSync(shot, Buffer.from(data, "base64")); result.screenshot = shot; } }
+    }
   } catch (e) {
     result.fatal = String(e?.stack || e?.message || e);
     log("FATAL", result.fatal.split("\n")[0]);

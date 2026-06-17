@@ -60,10 +60,11 @@ html,body{width:${OW}px;height:${OH}px;background:#0b1220;color:#e6edf3;font:14p
 pre{white-space:pre-wrap;word-break:break-all;color:#9de0ad;font-size:12px}`;
 
 function frameHtml(result, hit) {
-  const left = hit.shot
-    ? `<img class=app src="data:image/png;base64,${hit.shot}">`
-    : `<div class=req><div class=h>REQUEST</div><pre>${esc(result.meta.trigger)}</pre>` +
-      (result.response ? `<div class=h style="margin-top:14px">RESPONSE · curl exit ${result.response.exitCode}${result.response.error ? " (" + esc(result.response.error) + ")" : ""}</div><pre>${esc((result.response.body || "").slice(0, 1400))}</pre>` : "") + `</div>`;
+  // The left pane is the FULLY-RENDERED page (captured after the run resumed + settled) — the same
+  // for every frame; the trace panel + caption are what change per hit. Recording is Chrome-only.
+  const left = result.finalShot
+    ? `<img class=app src="data:image/png;base64,${result.finalShot}">`
+    : `<div class=req><div class=h>(no app screenshot)</div></div>`;
   const stack = (hit.stack || []).map((f) => `<div class=fr>${esc(f)}</div>`).join("");
   const locals = Object.entries(hit.locals || {}).map(([k, v]) => `<div class=kv><span class=k>${esc(k)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
   const exprs = Object.entries(hit.exprs || {}).map(([e, v]) => `<div class="kv expr">⊢ <span class=k>${esc(e)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");

@@ -44,15 +44,16 @@ substrings with `--root <dir>` (defaults to cwd). Use `--check` to verify one bi
 **Shared flags**: `--expr '<js>'` (repeatable; evaluated at every hit) · `--steps over,into,out` (step plan
 at the first hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json <path>` · `--timeout-ms N` ·
 `--shot <png>` (Chrome) · `--ws <url>` / `--url-match` / `--title-match` (pick a specific target) ·
-**`--record <out.mp4>`** + `--step-secs <n>` + `--title <text>` (record a debug-replay video).
+**`--record <out.mp4>`** + `--step-secs <n>` + `--title <text>` (record a Chrome-target debug-replay video).
 
-## Recording (`--record`)
-Each breakpoint hit becomes one **side-by-side frame** — left: the app screenshot (Chrome) or the
-request/response (Node); right: the trace panel (stack · locals · watched exprs); bottom: a caption — held
-`--step-secs` seconds, then all frames are assembled into an mp4. Frames are rendered as HTML in a throwaway
-headless Chrome (so it needs a **Chrome binary**, `$CHROME_BIN` to override) and stitched with **ffmpeg**.
-Because a breakpoint **freezes the page**, a Chrome frame shows the app *paused at that line* (often
-mid-render) — the value is the synchronized app+state pairing, not a smooth playthrough.
+## Recording (`--record`) — Chrome target only
+`--record <out.mp4>` makes a side-by-side **debug-replay** video: **left** = the app's **fully-rendered**
+screen, **right** = each hit's trace panel (stack · locals · watched exprs), **bottom** = a caption. One
+frame per hit, held `--step-secs`, stitched into an mp4. The left pane is the page captured **after the run
+resumes and settles** (so it's the real rendered screen, not the blank mid-render frame you'd get from a
+paused breakpoint); it's the same screen on every frame, while the trace panel advances hit-by-hit. Frames
+are rendered as HTML in a throwaway headless Chrome (needs a **Chrome binary**, `$CHROME_BIN` to override) +
+**ffmpeg**. **`--record` is ignored on the Node (`--port`) target** — there's no screen to record.
 
 `stdout` is the trace, `stderr` is `[trace]` progress; exit `0` ok · `1` runtime error · `2` usage error
 (`--check`: `0` bound · `2` not bound).
