@@ -1,11 +1,13 @@
-# Scenario runner — and the image for the traced headless Chrome. Bundles the trace CLI, a headless
-# Chromium (the Recorder renders the React debug-replay frames with it), and ffmpeg (encodes the mp4).
-# At runtime it shares the demo network namespace, so every target is on localhost; it waits for them,
-# then runs test/servers/scenarios.sh, emitting each trace to the collector.
+# All-in-one demo image. This single container IS the whole end-to-end demo: it bundles the trace CLI,
+# Node, Python + debugpy, a headless Chromium (the Recorder also renders the React replay frames with it)
+# and ffmpeg (encodes the mp4). At runtime it starts the Node/Python/React/Chrome targets on its own
+# loopback, waits for them + the collector, then runs test/servers/scenarios.sh, emitting each trace.
 FROM node:22-slim
 
+# chromium + ffmpeg for the Chrome trace & recording; python3 + debugpy for the tax service; curl to poll.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      chromium ffmpeg curl ca-certificates \
+      chromium ffmpeg curl ca-certificates python3 python3-pip \
+    && pip3 install --no-cache-dir --break-system-packages debugpy \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium won't run as root without --no-sandbox. The Recorder spawns Chrome via $CHROME_BIN, so point

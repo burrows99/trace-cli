@@ -9,8 +9,8 @@
 #   export S3_ENDPOINT=http://localhost:9000
 #   trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9 --emit http://localhost:4747
 #
-# Bringing the stack up runs the whole end-to-end demo too (Node + Python + React + Chrome targets + a runner),
-# with no host setup — `docker compose up --build` starts everything; `docker compose down` stops it all:
+# Bringing the stack up runs the whole end-to-end demo too (Node + Python + React + Chrome targets, all in
+# one demo container), no host setup — `docker compose up --build` starts everything; `docker compose down` stops it all:
 #   docker compose up --build                       # then watch all 5 traces (incl. the React video) at :4747
 services:
   trace-collector:
@@ -63,96 +63,21 @@ services:
       - ./.mock-aws-data:/data
     restart: unless-stopped
 
-  # ───────────────────────── demo group (comes up/down with the rest of the stack) ─────────────────────────
-  # A fully self-contained run of test/servers/scenarios.sh: the Node/Python/React apps being traced, a headless
-  # Chrome, and a scenario-runner that drives them and emits every trace to the collector (with the React video
-  # uploaded to mock-aws). The trace CLI discovers debug targets on localhost only, so the whole group shares ONE
-  # network namespace (the `demo-net` anchor) — every service sees the others on 127.0.0.1, exactly like running
-  # the servers by hand. Internal app/debug ports stay off the host (no clash with anything you run locally).
-
-  # Network anchor: holds the shared netns for the demo group and bridges it to the core services (collector, s3).
-  demo-net:
-    image: alpine:3.20
-    container_name: trace-demo-net
-    command: ["sleep", "infinity"]
-    restart: unless-stopped
-
-  # Node order-API / BFF (:3100), under the inspector on :9230. Calls the Python tax service over localhost.
-  node-api:
-    image: node:22-slim
-    container_name: trace-demo-node-api
-    network_mode: "service:demo-net"
-    working_dir: /app
-    volumes:
-      - ./test/servers:/app/test/servers:ro
-    environment:
-      - PORT=3100
-      - TAX_SVC=http://127.0.0.1:3101
-    command: ["node", "--inspect=9230", "test/servers/node-api/server.js"]
-    depends_on: [demo-net]
-    restart: unless-stopped
-
-  # Python tax service (:3101), debugpy on :5679.
-  python-api:
-    build:
-      context: .
-      dockerfile: test/servers/python-api/Dockerfile
-    image: trace-demo-python
-    container_name: trace-demo-python-api
-    network_mode: "service:demo-net"
-    working_dir: /app
-    volumes:
-      - ./test/servers:/app/test/servers:ro
-    environment:
-      - PORT=3101
-      - DEBUG_PORT=5679
-    depends_on: [demo-net]
-    restart: unless-stopped
-
-  # React checkout UI (Vite dev server :5180, strictPort + source maps for the Chrome trace).
-  react-app:
-    image: node:22-slim
-    container_name: trace-demo-react-app
-    network_mode: "service:demo-net"
-    working_dir: /app
-    volumes:
-      - ./test/servers/react-app:/app
-      - /app/node_modules          # anonymous volume: keep Linux deps, don't inherit the host's macOS node_modules
-    # --host 0.0.0.0: bind all interfaces (vite defaults to localhost→::1, but the runner/Chrome reach it on 127.0.0.1).
-    command: ["sh", "-lc", "npm install --no-audit --no-fund && npm run dev -- --host 0.0.0.0"]
-    depends_on: [demo-net]
-    restart: unless-stopped
-
-  # Headless Chrome being traced (CDP on :9334). Reuses the runner image (it already ships Chromium).
-  chrome:
-    image: trace-demo-runner
-    container_name: trace-demo-chrome
-    network_mode: "service:demo-net"
-    command:
-      - "/usr/bin/chromium"
-      - "--headless=new"
-      - "--no-sandbox"
-      - "--disable-dev-shm-usage"
-      - "--disable-gpu"
-      - "--remote-debugging-port=9334"
-      - "--remote-debugging-address=127.0.0.1"
-      - "--remote-allow-origins=*"
-      - "--user-data-dir=/tmp/chrome-trace"
-      - "about:blank"
-    depends_on: [demo-net]
-    restart: unless-stopped
-
-  # The driver: waits for every target + the collector, then runs all 5 scenarios once and exits.
-  scenario-runner:
+  # ───────────────────────── demo (one container, comes up/down with the stack) ─────────────────────────
+  # The whole self-contained run of test/servers/scenarios.sh, collapsed into ONE container. It starts the
+  # Node/Python/React apps being traced + a headless Chrome on its own loopback, waits for them and the
+  # collector, then drives all 5 scenarios once (uploading the React video to mock-aws) and exits. One
+  # container = one network namespace, so every target is on 127.0.0.1 (exactly as the CLI's localhost
+  # discovery expects) and all app/debug ports stay inside it — no shared-netns anchor, no host clashes.
+  demo:
     build:
       context: .
       dockerfile: test/servers/runner/Dockerfile
-    image: trace-demo-runner
-    container_name: trace-demo-runner
-    network_mode: "service:demo-net"
+    image: trace-demo
+    container_name: trace-demo
     working_dir: /app
     volumes:
-      - ./test/servers:/app/test/servers:ro
+      - ./test/servers:/app/test/servers:ro     # scenarios + app sources (live-editable, no rebuild)
     environment:
       - TRACE_COLLECTOR_URL=http://trace-collector:4747
       - S3_ENDPOINT=http://mock-aws:9000        # upload the recording here (in-network)
@@ -162,10 +87,5 @@ services:
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - AWS_REGION=us-east-1
     depends_on:
-      - demo-net
-      - node-api
-      - python-api
-      - react-app
-      - chrome
       - trace-collector
     restart: "no"
