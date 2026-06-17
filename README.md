@@ -50,8 +50,8 @@ debugpy.listen(("127.0.0.1", 5678))   # then serve as normal — trace-cli attac
 ```
 
 Shared flags: `--bp <file:line | file@substring>` (repeatable) · `--expr '<js/py>'` (repeatable, evaluated
-at every hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--format human|json` · `--json <path>`
-(write the envelope) · `--emit <url>` (POST to a collector) · `--check` (verify a breakpoint binds, then
+at every hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json [path]` (envelope to a file, or
+bare `--json` for JSON on stdout) · `--emit <url>` (POST to a collector) · `--check` (verify a bp binds, then
 exit). Chrome adds `--shot <png>` and `--record <out.mp4>`. `stdout` is the trace, `stderr` is `[trace]`
 logs; exit `0` ok · `1` runtime · `2` usage.
 
@@ -106,7 +106,7 @@ span, and a UI action all become `Event`s on one timeline, each tagged with its 
 
 **Mutation lineage** (`data.lineage`) is a *derived* view computed in the normalization tier: for every
 watched value, the ordered series of how it changed as flow continued (`total: 0 → 9.99 → 14.49`) — so an
-agent sees value-over-time, not just per-hit snapshots. It surfaces in `--format human`, the JSON envelope,
+agent sees value-over-time, not just per-hit snapshots. It surfaces in the human render, the JSON envelope,
 and the live UI. (Empty when nothing mutates, e.g. a single-hit trace.)
 
 Print the full JSON Schema with `trace schema` — it's at

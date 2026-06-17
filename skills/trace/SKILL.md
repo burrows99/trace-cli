@@ -40,7 +40,7 @@ $trace dynamic --chrome 9222 --url http://localhost:3000/some/route \
 
 # Record a side-by-side debug-replay video (Chrome only): [ app | trace panel ] + captions
 $trace dynamic --chrome 9222 --url http://localhost:3000/some/route --bp src/pages/Thing.tsx:42 \
-  --record /tmp/replay.mp4 --title "What renders Thing" --step-secs 3
+  --record /tmp/replay.mp4
 ```
 
 **Breakpoints** (`--bp`, repeatable): `file:line` or `file@substring`. `file` is matched by path **suffix**
@@ -48,9 +48,9 @@ $trace dynamic --chrome 9222 --url http://localhost:3000/some/route --bp src/pag
 relative files with `--root <dir>` (defaults to cwd). Use `--check` to verify one binds without tracing.
 
 **Shared flags**: `--expr '<js/py>'` (repeatable; evaluated at every hit) · `--steps over,into,out`
-(Node/Chrome) · `--frames N` · `--max-hits N` · `--root <dir>` · `--format human|json` (stdout) ·
-`--json <path>` (write the envelope) · `--emit <url>` (POST the envelope to a `trace serve` collector;
-or set `TRACE_COLLECTOR_URL`) · Chrome: `--shot <png>`, **`--record <out.mp4>`** + `--step-secs` + `--title`.
+(Node/Chrome) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json [path]` (envelope to a file, or
+bare `--json` for JSON on stdout) · `--emit <url>` (POST the envelope to a `trace serve` collector; or set
+`TRACE_COLLECTOR_URL`) · Chrome: `--shot <png>`, **`--record <out.mp4>`**.
 
 ## Other subcommands
 - `$trace doctor` — which backing tools are installed (node, python3, debugpy, chrome, ffmpeg, …).
@@ -64,7 +64,7 @@ or set `TRACE_COLLECTOR_URL`) · Chrome: `--shot <png>`, **`--record <out.mp4>`*
 ## Reading the trace
 Each hit shows `#seq +elapsedMs fn at file:line`, the call `stack`, local/block scope variables (`•`), and
 any `--expr` values (`⊢`). Chrome traces also include console errors/warnings, uncaught exceptions, failed
-(≥400) responses, and the final URL. With `--format json`, stdout is the unified envelope: events carry
+(≥400) responses, and the final URL. With bare `--json`, stdout is the unified envelope: events carry
 `source` (`cdp`/`dap`) and a `sessionId`. "no breakpoints hit" means the line wasn't on the path taken
 (wrong target/route, branch not taken, or it didn't bind — check with `--check`).
 
