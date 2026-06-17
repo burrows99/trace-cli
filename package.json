@@ -1,7 +1,7 @@
 {
   "name": "trace-cli",
-  "version": "0.2.1",
-  "description": "General-purpose execution tracer over the Chrome DevTools Protocol — set breakpoints, fire a trigger, get a full execution trace. Works against a Node inspector or a Chrome page. Usable by any agent, human, or script.",
+  "version": "0.3.0",
+  "description": "Unified, language-agnostic execution tracer & analyzer. One JSON envelope across breakpoint traces (Node/Chrome via CDP, Python via DAP/debugpy) and static analysis. A thin orchestration shell over battle-tested debug protocols. Usable by any agent, human, or script.",
   "type": "module",
   "bin": {
     "trace": "bin/trace"
@@ -23,9 +23,11 @@
   },
   "scripts": {
     "trace": "node bin/trace",
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
+    "@vscode/debugadapter-testsupport": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0",
     "commander": "^12.1.0",
     "source-map": "^0.7.4"
   },

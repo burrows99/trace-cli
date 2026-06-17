@@ -72,6 +72,9 @@ export async function connect(wsUrl) {
   return {
     send, on, waitForPaused,
     hasQueued: () => pausedQueue.length > 0,
+    // interrupt(): unblock a pending waitForPaused with null — used when the trigger finishes so we don't
+    // sit out the full timeout waiting for a pause that will never come.
+    interrupt: () => { if (pausedWaiter) { const w = pausedWaiter; pausedWaiter = null; w(null); } },
     scriptUrl: (id) => scripts.get(id)?.url,
     script: (id) => scripts.get(id),
     scripts: () => scripts,

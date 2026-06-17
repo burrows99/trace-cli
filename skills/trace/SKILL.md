@@ -1,72 +1,75 @@
 ---
 name: trace
-description: Get a full execution trace through a running app via the `trace` CLI — set breakpoints at file:line, fire a trigger (a curl command for a Node `--inspect` target, or a page navigation for a Chrome `--remote-debugging-port` target), and read back every hit with its call stack, locals, watched expressions and timing. Use for "trace this request/route", "what runs when I hit /endpoint", "step through this function", "why is this value X here", "set a breakpoint and show the trace". Vendor-neutral: pass the port, the trigger, and the breakpoints — nothing is hardcoded.
+description: Get a full execution trace through a running app via the `trace` CLI — set breakpoints at file:line, fire a trigger (a curl command for a Node `--inspect` or Python `debugpy` backend, or a page navigation for a Chrome `--remote-debugging-port` target), and read back every hit with its call stack, locals, watched expressions and timing as one JSON envelope. Language-agnostic: Node/Chrome over CDP, Python over DAP. Also `trace serve` for a realtime web UI of all traces. Use for "trace this request/route", "what runs when I hit /endpoint", "step through this function", "why is this value X here", "set a breakpoint and show the trace". Vendor-neutral: pass the port, the trigger, and the breakpoints — nothing is hardcoded.
 allowed-tools: Bash(node:*), Read
 ---
 
-# trace — execution tracer over the Chrome DevTools Protocol
+# trace — unified, language-agnostic execution tracer
 
-`trace` attaches to an already-running debug target, sets breakpoints, fires a trigger, and prints the
-full execution trace in one shot. You read the trace; you never drive the debugger by hand. It needs a
+`trace dynamic` attaches to an already-running debug target, sets breakpoints, fires a trigger, and prints
+the full execution trace in one shot. You read the trace; you never drive the debugger by hand. One engine,
+two protocol drivers — **CDP** for Node/Chrome, **DAP** for Python (and other DAP adapters). It needs a
 target already listening:
-- **Node**: start the process with `--inspect` (e.g. `node --inspect=9229 …`), then use `--port 9229`.
-- **Chrome**: start Chrome with `--remote-debugging-port=9222`, then use `--chrome 9222 --url <page>`.
+- **Node** (CDP): start with `--inspect` (`node --inspect=9229 …`), then `dynamic --node 9229`.
+- **Python** (DAP): the server calls `debugpy.listen(("127.0.0.1", 5678))`, then `dynamic --python 5678`.
+- **Chrome** (CDP): start with `--remote-debugging-port=9222`, then `dynamic --chrome 9222 --url <page>`.
 
 ## Invoking (do this first)
-Run the bundled binary by its **explicit install path** — Claude substitutes `${CLAUDE_PLUGIN_ROOT}` to this
-plugin's directory. Do **not** use the bare name `trace`: it collides with macOS's `/usr/bin/trace` (plugin
-`bin/` is appended to PATH, so the system one wins). Set a shorthand once, then use `$trace` everywhere:
+Run the bundled binary by its **explicit install path** — Claude substitutes `${CLAUDE_PLUGIN_ROOT}`. Do
+**not** use the bare name `trace` (it collides with macOS's `/usr/bin/trace`). Set a shorthand once:
 ```bash
 trace="node ${CLAUDE_PLUGIN_ROOT}/bin/trace"
 ```
 
 ## Usage
 ```bash
-# Node target — trigger is a curl command run after the breakpoints bind
-$trace --port 9229 \
+# Node (CDP) — trigger is a curl run after the breakpoints bind
+$trace dynamic --node 9229 \
   --curl 'curl -s http://localhost:3002/v1/dashboard -H "Cookie: sid=…"' \
   --bp src/dashboard/dashboard.service.ts:149 \
   --bp 'src/foo.ts@unique substring on the line'        # line number OR a unique substring
 
-# Chrome target — trigger is navigating to the route + reloading
-$trace --chrome 9222 --url http://localhost:3000/some/route \
+# Python (DAP/debugpy) — trigger is a curl
+$trace dynamic --python 5678 \
+  --curl 'curl -s http://127.0.0.1:3001/price?qty=3' \
+  --bp app/service.py:42 --expr qty
+
+# Chrome (CDP) — trigger is navigating to the route + reloading
+$trace dynamic --chrome 9222 --url http://localhost:3000/some/route \
   --bp src/pages/Thing.tsx:42 --shot /tmp/thing.png
 
-# Record a side-by-side debug-replay video: [ app | trace panel ] + captions, one held frame per hit
-$trace --chrome 9222 --url http://localhost:3000/some/route --bp src/pages/Thing.tsx:42 \
+# Record a side-by-side debug-replay video (Chrome only): [ app | trace panel ] + captions
+$trace dynamic --chrome 9222 --url http://localhost:3000/some/route --bp src/pages/Thing.tsx:42 \
   --record /tmp/replay.mp4 --title "What renders Thing" --step-secs 3
 ```
 
-**Breakpoints** (`--bp`, repeatable): `file:line` or `file@substring`. `file` is matched to the target's
-loaded scripts/source-maps by path **suffix**, so a short relative path works; resolve relative files /
-substrings with `--root <dir>` (defaults to cwd). Use `--check` to verify one binds without tracing.
+**Breakpoints** (`--bp`, repeatable): `file:line` or `file@substring`. `file` is matched by path **suffix**
+(Node/Chrome via source maps; Python directly against the `.py`), so a short relative path works; resolve
+relative files with `--root <dir>` (defaults to cwd). Use `--check` to verify one binds without tracing.
 
-**Shared flags**: `--expr '<js>'` (repeatable; evaluated at every hit) · `--steps over,into,out` (step plan
-at the first hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json <path>` · `--timeout-ms N` ·
-`--shot <png>` (Chrome) · `--ws <url>` / `--url-match` / `--title-match` (pick a specific target) ·
-**`--record <out.mp4>`** + `--step-secs <n>` + `--title <text>` (record a Chrome-target debug-replay video).
+**Shared flags**: `--expr '<js/py>'` (repeatable; evaluated at every hit) · `--steps over,into,out`
+(Node/Chrome) · `--frames N` · `--max-hits N` · `--root <dir>` · `--format human|json` (stdout) ·
+`--json <path>` (write the envelope) · `--emit <url>` (POST the envelope to a `trace serve` collector;
+or set `TRACE_COLLECTOR_URL`) · Chrome: `--shot <png>`, **`--record <out.mp4>`** + `--step-secs` + `--title`.
 
-## Recording (`--record`) — Chrome target only
-`--record <out.mp4>` makes a side-by-side **debug-replay** video: **left** = the app's **fully-rendered**
-screen, **right** = each hit's trace panel (stack · locals · watched exprs), **bottom** = a caption. One
-frame per hit, held `--step-secs`, stitched into an mp4. The left pane is the page captured **after the run
-resumes and settles** (so it's the real rendered screen, not the blank mid-render frame you'd get from a
-paused breakpoint); it's the same screen on every frame, while the trace panel advances hit-by-hit. Frames
-are rendered as HTML in a throwaway headless Chrome (needs a **Chrome binary**, `$CHROME_BIN` to override) +
-**ffmpeg**. **`--record` is ignored on the Node (`--port`) target** — there's no screen to record.
+## Other subcommands
+- `$trace doctor` — which backing tools are installed (node, python3, debugpy, chrome, ffmpeg, …).
+- `$trace schema` — the output JSON Schema (the contract).
+- `$trace serve --port 4747` — a collector + **realtime web UI** of all traces (Langfuse-style). Run it,
+  then add `--emit http://localhost:4747` to any trace. Also runnable as a Docker service (`docker compose up`).
 
-`stdout` is the trace, `stderr` is `[trace]` progress; exit `0` ok · `1` runtime error · `2` usage error
+`stdout` is the trace, `stderr` is `[trace]` progress; exit `0` ok · `1` runtime · `2` usage
 (`--check`: `0` bound · `2` not bound).
 
-## How it resolves `file:line`
-Breakpoints are mapped to generated code via whatever **source maps the target reports**
-(`scriptParsed.sourceMapURL`: `data:` inline, `file://`, http, or a `<script>.map` sibling) — so compiled
-TS and bundled front-ends work without any build-layout configuration. Plain JS binds directly. A
-breakpoint only binds once its script is **loaded**: for Node that's immediate; for Chrome the page is
-navigated first so its modules parse, then breakpoints are set, then it reloads to trigger.
-
 ## Reading the trace
-Each hit shows `#seq +elapsedMs Class.fn at file:line`, the call `stack`, merged `local`/`block` scope
-variables (`•`), and any `--expr` values (`⊢`). Chrome traces also include console errors/warnings,
-uncaught exceptions, failed (≥400) responses, and the final URL. "no breakpoints hit" means the line
-wasn't on the path taken (wrong target/route, branch not taken, or it didn't bind).
+Each hit shows `#seq +elapsedMs fn at file:line`, the call `stack`, local/block scope variables (`•`), and
+any `--expr` values (`⊢`). Chrome traces also include console errors/warnings, uncaught exceptions, failed
+(≥400) responses, and the final URL. With `--format json`, stdout is the unified envelope: events carry
+`source` (`cdp`/`dap`) and a `sessionId`. "no breakpoints hit" means the line wasn't on the path taken
+(wrong target/route, branch not taken, or it didn't bind — check with `--check`).
+
+## How it resolves `file:line`
+Node/Chrome map breakpoints to generated code via whatever **source maps the target reports** (so compiled
+TS and bundled front-ends work with no build config); plain JS binds directly. Python is interpreted, so
+`file:line` binds directly against the `.py` source. A breakpoint only binds once its script is **loaded**:
+Node/Python are immediate; for Chrome the page is navigated first so modules parse, then it reloads to trigger.

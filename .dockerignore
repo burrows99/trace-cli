@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.trace-data
+.venv-trace
+test
+docs
+graphify-out
+*.log
+*.mp4
+*.png
+.claude
+.DS_Store

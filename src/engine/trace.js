@@ -5,8 +5,10 @@
 import { exec } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
+import { isAbsolute, join, relative } from "node:path";
 
 import { connect, resolveWsUrl, renderRO, log } from "./cdp.js";
+import { connectDap, dapHandshake } from "./dap.js";
 import { findGenerated, generatedToSource, pathOf, disposeConsumers, setRoot } from "./sourcemaps.js";
 import { parseBreakpoints } from "./breakpoints.js";
 
@@ -140,11 +142,12 @@ export async function traceNode(opts = {}) {
     if (curl) {
       ctx.t0 = performance.now();
       log(`fired: ${curl.length > 90 ? curl.slice(0, 90) + "…" : curl}`);
-      triggerPromise = runCurl(curl, reqTimeoutMs).then((r) => { result.response = r; }).finally(() => { triggerDone = true; });
+      triggerPromise = runCurl(curl, reqTimeoutMs).then((r) => { result.response = r; }).finally(() => { triggerDone = true; client.interrupt(); });
     }
     while (result.hits.length < maxHits) {
       let paused;
       try { paused = await client.waitForPaused(timeoutMs); } catch { break; }
+      if (!paused) break;                                          // trigger finished, no more pauses coming
       result.hits.push(await capture(client, paused, "breakpoint", ctx));
       await runSteps(client, ctx, timeoutMs);
       await client.send("Debugger.resume").catch(() => {});
@@ -248,4 +251,149 @@ export async function checkBreakpoint(opts = {}) {
     await client.send("Debugger.removeBreakpoint", { breakpointId: r.breakpointId }).catch(() => {});
     return { file: bp.file, line: bp.line, bound, mapped: g.mapped, scriptUrl: g.scriptUrl };
   } finally { client.close(); disposeConsumers(); }
+}
+
+// ---- Python (and any DAP target): breakpoints over the Debug Adapter Protocol -------------------
+// Python is interpreted, so file:line binds directly against the .py source — no source maps. The
+// trigger/capture loop mirrors traceNode; only the protocol driver (DAP vs CDP) differs.
+
+const relTo = (root, abs) => {
+  if (!abs) return "<native>";
+  const rel = relative(root || process.cwd(), abs);
+  return rel && !rel.startsWith("..") ? rel : abs;
+};
+
+function renderVar(v) {
+  // DAP `variables` use `value`; `evaluate` responses use `result` — accept either.
+  let s = v?.value ?? v?.result ?? "";
+  if (typeof s === "string" && s.length > 200) s = s.slice(0, 200) + "…";
+  return s;
+}
+
+async function setDapBreakpoints(client, bps, root, bpById) {
+  const byFile = new Map();
+  for (const bp of bps) {
+    const abs = isAbsolute(bp.file) ? bp.file : join(root || process.cwd(), bp.file);
+    if (!byFile.has(abs)) byFile.set(abs, []);
+    byFile.get(abs).push(bp);
+  }
+  const report = [];
+  for (const [abs, fileBps] of byFile) {
+    let got = [];
+    try {
+      const r = await client.send("setBreakpoints", { source: { path: abs }, breakpoints: fileBps.map((b) => ({ line: b.line })) });
+      got = r.breakpoints || [];
+    } catch (e) {
+      for (const b of fileBps) report.push({ file: b.file, line: b.line, bound: false, note: e.message });
+      continue;
+    }
+    fileBps.forEach((b, i) => {
+      const g = got[i] || {};
+      const bound = !!g.verified;
+      if (g.id != null) bpById.set(g.id, { file: b.file, line: b.line });
+      report.push({ file: b.file, line: g.line ?? b.line, bound, note: g.message });
+      log(`bp ${b.file}:${b.line} → ${bound ? "BOUND" : "pending"}`);
+    });
+  }
+  return report;
+}
+
+async function capturePy(client, stopped, kind, ctx) {
+  const { frames, exprs, root, bpById } = ctx;
+  const st = await client.send("stackTrace", { threadId: stopped.threadId, startFrame: 0, levels: frames });
+  const sf = st.stackFrames || [];
+  const top = sf[0];
+  const stack = sf.map((f) => `${f.name || "(anon)"} (${relTo(root, f.source?.path)}:${f.line})`);
+
+  const locals = {};
+  if (top) {
+    let scopes = [];
+    try { scopes = (await client.send("scopes", { frameId: top.id })).scopes || []; } catch {}
+    const wantLocal = scopes.some((s) => /local/i.test(s.name));   // prefer Locals; fall back to all cheap scopes
+    for (const sc of scopes) {
+      if (sc.expensive) continue;                                  // skip Globals / builtins
+      if (wantLocal && !/local/i.test(sc.name)) continue;
+      let vars = [];
+      try { vars = (await client.send("variables", { variablesReference: sc.variablesReference })).variables || []; } catch {}
+      for (const v of vars) if (!(v.name in locals) && !v.name.startsWith("__")) locals[v.name] = renderVar(v);
+    }
+  }
+
+  const ex = {};
+  for (const e of exprs) {
+    try { ex[e] = renderVar(await client.send("evaluate", { expression: e, frameId: top?.id, context: "watch" })); }
+    catch (err) { ex[e] = `⟂ ${err.message}`; }
+  }
+
+  const labelBp = (stopped.hitBreakpointIds || []).map((id) => bpById.get(id)).filter(Boolean)[0];
+  return {
+    seq: ctx.hits.length + 1, kind,
+    at: top ? `${relTo(root, top.source?.path)}:${top.line}` : (labelBp ? `${labelBp.file}:${labelBp.line}` : stack[0]),
+    fn: top?.name || "(anonymous)",
+    tMs: Math.round(performance.now() - ctx.t0),
+    stack, locals, exprs: exprs.length ? ex : undefined,
+  };
+}
+
+// checkPython({ host, port, file, lineSpec, root, adapter }) → { file, line, bound, note }. Attaches,
+// sets one breakpoint, reports whether it verified, then detaches. The DAP analogue of checkBreakpoint.
+export async function checkPython(opts = {}) {
+  const { host = "127.0.0.1", port = 5678, file, lineSpec, line, root, adapter = "debugpy" } = opts;
+  const [bp] = parseBreakpoints([`${file}@${lineSpec ?? line}`], root);
+  const client = await connectDap({ host, port });
+  try {
+    const finishConfig = await dapHandshake(client, { adapterID: adapter });
+    const [r] = await setDapBreakpoints(client, [bp], root, new Map());
+    await finishConfig();
+    return { file: bp.file, line: r?.line ?? bp.line, bound: !!r?.bound, note: r?.note };
+  } finally {
+    try { await client.send("disconnect", { restart: false, terminateDebuggee: false }); } catch {}
+    client.close();
+  }
+}
+
+// tracePython({ host, port, curl, breakpoints, root, exprs, frames, maxHits, timeoutMs, reqTimeoutMs,
+//   settleMs, adapter, target }) → trace result. Trigger = the curl command. Attaches to a DAP debug
+//   server (e.g. a server that called `debugpy.listen((host, port))`), sets breakpoints, fires curl,
+//   captures every stop. Language-agnostic: any DAP adapter works (debugpy, dlv-dap, …).
+export async function tracePython(opts = {}) {
+  const {
+    host = "127.0.0.1", port = 5678, curl, breakpoints = [], root,
+    exprs = [], steps = [], frames = 6, maxHits = 25,
+    timeoutMs = 30000, reqTimeoutMs = 60000, settleMs = 1200, adapter = "debugpy", target = "python",
+  } = opts;
+  const bps = parseBreakpoints(breakpoints, root);
+  const result = { meta: { at: stamp(), target, trigger: curl || null, breakpoints: bps.map((b) => b.raw), exprs, steps }, breakpoints: [], hits: [] };
+
+  const client = await connectDap({ host, port });
+  const ctx = { t0: performance.now(), hits: result.hits, frames, exprs, steps, root, bpById: new Map() };
+  try {
+    const finishConfig = await dapHandshake(client, { adapterID: adapter });
+    result.breakpoints = await setDapBreakpoints(client, bps, root, ctx.bpById);
+    await finishConfig();
+    await sleep(settleMs);                                          // let the server bind its HTTP port
+
+    let triggerDone = !curl, triggerPromise = Promise.resolve();
+    if (curl) {
+      ctx.t0 = performance.now();
+      log(`fired: ${curl.length > 90 ? curl.slice(0, 90) + "…" : curl}`);
+      triggerPromise = runCurl(curl, reqTimeoutMs).then((r) => { result.response = r; }).finally(() => { triggerDone = true; client.interrupt(); });
+    }
+    while (result.hits.length < maxHits) {
+      let stopped;
+      try { stopped = await client.waitForStopped(timeoutMs); } catch { break; }
+      if (!stopped) break;                                         // trigger finished, no more stops coming
+      result.hits.push(await capturePy(client, stopped, "breakpoint", ctx));
+      await client.send("continue", { threadId: stopped.threadId }).catch(() => {});
+      if (triggerDone && !client.hasQueued()) break;
+    }
+    await triggerPromise.catch(() => {});
+  } catch (e) {
+    result.fatal = String(e?.stack || e?.message || e);
+    log("FATAL", result.fatal.split("\n")[0]);
+  } finally {
+    try { await client.send("disconnect", { restart: false, terminateDebuggee: false }); } catch {}
+    client.close();
+  }
+  return result;
 }
