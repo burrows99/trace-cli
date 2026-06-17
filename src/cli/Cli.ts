@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 
 import { DynamicCommand, type DynamicTargetKind } from "./commands/DynamicCommand.js";
 import { DoctorCommand } from "./commands/DoctorCommand.js";
+import { ManifestCommand } from "./commands/ManifestCommand.js";
 import { SchemaCommand } from "./commands/SchemaCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
 import { Renderer } from "../engine/Renderer.js";
@@ -107,12 +108,19 @@ export class Cli {
       .description("collector + realtime UI: ingest envelopes (POST /v1/traces) and show all traces live")
       .option("--port <n>", "port to listen on", int, 4000)
       .option("--host <h>", "host to bind (default 0.0.0.0)")
-      .option("--data <dir>", "directory to persist sessions (env TRACE_DATA, default .trace-data)")
-      .action((o) => new ServeCommand().run({ port: o.port, host: o.host, dataDir: o.data }));
+      .option("--db <url>", "Postgres connection string to persist sessions (env DATABASE_URL/POSTGRES_URL)")
+      .action((o) => new ServeCommand().run({ port: o.port, host: o.host, databaseUrl: o.db }));
 
     program.command("schema")
       .description("print the output JSON Schema (the contract every Trace conforms to)")
       .action(() => { process.stdout.write(new SchemaCommand().run()); process.exit(0); });
+
+    program.command("manifest")
+      .description("print a self-describing JSON of every command, flag & argument, generated from the parser (the input contract; `schema` is the output contract)")
+      .action(() => {
+        process.stdout.write(JSON.stringify(new ManifestCommand().run(program), null, 2) + "\n");
+        process.exit(0);
+      });
 
     return program;
   }

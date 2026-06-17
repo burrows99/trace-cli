@@ -17,15 +17,17 @@ export type EnvelopePlain = Record<string, any>;
 
 /**
  * SessionStore — abstraction for persisting + serving traces (DIP). The Collector depends on this interface,
- * so the file-backed store can be swapped for SQLite/ClickHouse at scale with no Collector change.
+ * not a concrete backend, so the store can be swapped (e.g. Postgres → ClickHouse) at scale. The data methods
+ * are async so a networked backend is a first-class implementation, not a blocking hack; `subscribe` stays
+ * sync because it only registers a realtime callback. The shipped implementation is PostgresSessionStore.
  */
 export interface SessionStore {
-  ingest(env: EnvelopePlain): SessionSummary | null;
-  list(): SessionSummary[];
-  get(id: string): EnvelopePlain | null;
+  ingest(env: EnvelopePlain): Promise<SessionSummary | null>;
+  list(): Promise<SessionSummary[]>;
+  get(id: string): Promise<EnvelopePlain | null>;
   subscribe(fn: (s: SessionSummary) => void): () => void;
-  clear(): void;
-  size(): number;
+  clear(): Promise<void>;
+  size(): Promise<number>;
 }
 
 /** summarize(env) — the compact row for an ingested envelope. */

@@ -1,7 +1,8 @@
-# Run the trace collector + realtime UI + a local S3 (mock-aws) for recordings:
+# Run the trace collector + realtime UI, Postgres (session store), and a local S3 (mock-aws) for recordings:
 #   docker compose up --build
-#   open http://localhost:4747          # the trace UI
+#   open http://localhost:4747          # the trace UI (sessions persisted in Postgres)
 #   open http://localhost:9001          # mock-aws (MinIO) console — minioadmin / minioadmin
+#   psql postgres://trace:trace@localhost:5432/trace -c 'select session_id, at from trace_sessions;'
 #
 # Emit traces from the host (the CLI runs where your debug target is reachable). Chrome traces record by
 # default and upload the video to mock-aws, attaching a link to the trace:
@@ -14,10 +15,32 @@ services:
     container_name: trace-collector
     ports:
       - "4747:4747"
-    volumes:
-      - ./.trace-data:/data
     environment:
-      - TRACE_DATA=/data
+      # The collector is database-driven: sessions persist in Postgres (the `db` service).
+      - DATABASE_URL=postgres://trace:trace@db:5432/trace
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Postgres — the session store. The collector persists every trace envelope here (JSONB) via DATABASE_URL;
+  # in production you point DATABASE_URL at a managed Postgres instead — no code change.
+  db:
+    image: postgres:16
+    container_name: trace-db
+    environment:
+      - POSTGRES_USER=trace
+      - POSTGRES_PASSWORD=trace
+      - POSTGRES_DB=trace
+    ports:
+      - "5432:5432"   # connect from the host: DATABASE_URL=postgres://trace:trace@localhost:5432/trace
+    volumes:
+      - ./.trace-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trace -d trace"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   # S3-compatible object store standing in for AWS S3. The CLI talks the S3 API (AWS SDK) to it; in

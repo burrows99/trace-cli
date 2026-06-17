@@ -1,7 +1,8 @@
-# trace-cli — runs the collector + realtime trace UI as a service.
+# trace-cli — runs the collector + realtime trace UI as a service. Sessions persist in Postgres, so the
+# collector needs DATABASE_URL (see docker-compose.yml for the wired-up Postgres service).
 #
 #   docker build -t trace-cli .
-#   docker run -p 4747:4747 -v "$PWD/.trace-data:/data" trace-cli
+#   docker run -p 4747:4747 -e DATABASE_URL=postgres://user:pass@host:5432/trace trace-cli
 #   open http://localhost:4747
 #
 # Then point traces at it from the host:
@@ -25,13 +26,11 @@ COPY README.md LICENSE ./
 # Compile the TypeScript (class-first build) → dist/, which bin/trace runs.
 RUN npm run build
 
-# Persist sessions to a mounted volume.
-ENV TRACE_DATA=/data
-RUN mkdir -p /data && chown -R node:node /data /app
+RUN chown -R node:node /app
 USER node
 
 EXPOSE 4747
-VOLUME ["/data"]
 
+# Sessions persist in Postgres — provide DATABASE_URL at runtime (-e DATABASE_URL=... / compose).
 ENTRYPOINT ["node", "bin/trace"]
-CMD ["serve", "--port", "4747", "--host", "0.0.0.0", "--data", "/data"]
+CMD ["serve", "--port", "4747", "--host", "0.0.0.0"]

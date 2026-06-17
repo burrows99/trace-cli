@@ -62,23 +62,26 @@ See installed tooling with `trace doctor`.
 
 `trace serve` runs a **collector + realtime web UI** (Langfuse-style): a session list that updates live over
 SSE, and a per-trace timeline with stack, locals, watched expressions, and response. Point any trace at it
-with `--emit`.
+with `--emit`. Sessions persist in **Postgres**, so the collector needs a connection string — `DATABASE_URL`
+(or `POSTGRES_URL`, or `--db <url>`). The schema is created on first use; no migrations to run.
 
 ```bash
-# locally
+# locally (point at any Postgres; the trace_sessions table is created automatically)
+export DATABASE_URL=postgres://user:pass@localhost:5432/trace
 trace serve --port 4747                 # → http://localhost:4747
 trace dynamic --node 9229 --bp app.js:42 --curl '…' --emit http://localhost:4747
 
-# as a Docker service: collector + UI + a mock-aws (S3) for recordings
-docker compose up --build               # → http://localhost:4747 (UI), :9000 (S3), :9001 (S3 console)
+# as a Docker service: collector + UI + Postgres (session store) + a mock-aws (S3) for recordings
+docker compose up --build               # → http://localhost:4747 (UI), :5432 (Postgres), :9000/:9001 (S3)
 # then, from the host where your debug target is reachable:
 export S3_ENDPOINT=http://localhost:9000
 trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9 --emit http://localhost:4747
 ```
 
-Chrome recordings upload to S3 (the `mock-aws` container locally; point `S3_ENDPOINT` at real AWS in prod —
-the code talks the S3 API via the AWS SDK, no change), and the video link rides along in the trace + plays
-in the UI. `TRACE_COLLECTOR_URL` works as a default for `--emit`. The collector API: `POST /v1/traces` (ingest),
+Each trace envelope is one `trace_sessions` row (full envelope as JSONB + a precomputed summary). Chrome
+recordings upload to S3 (the `mock-aws` container locally; point `S3_ENDPOINT` at real AWS in prod — the code
+talks the S3 API via the AWS SDK, no change), and the video link rides along in the trace + plays in the UI.
+`TRACE_COLLECTOR_URL` works as a default for `--emit`. The collector API: `POST /v1/traces` (ingest),
 `GET /api/sessions`, `GET /api/sessions/:id`, `GET /api/stream` (SSE).
 
 ## The contract: one envelope
@@ -138,7 +141,7 @@ const restored = Trace.fromPlain(envelope); // rehydrate a stored envelope into 
 ```
 
 Lower-level building blocks are exported too: `Tracer`, `CdpDriver`/`DapDriver` (`ProtocolDriver`),
-`LineageAnalyzer`, `S3ArtifactStore` (`ArtifactStore`), `Collector`/`FileSessionStore` (`SessionStore`).
+`LineageAnalyzer`, `S3ArtifactStore` (`ArtifactStore`), `Collector`/`PostgresSessionStore` (`SessionStore`).
 
 ## As a Claude Code plugin
 

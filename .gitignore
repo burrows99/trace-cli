@@ -5,7 +5,10 @@ npm-debug.log*
 # trace artifacts / local output
 *.trace.json
 .trace-data/
+.trace-db-data/
 .mock-aws-data/
 .DS_Store
 
 dist/
+
+graphify-out/

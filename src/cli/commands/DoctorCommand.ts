@@ -7,7 +7,7 @@ import { VERSION } from "../../shared/version.js";
 
 const pexec = promisify(execFile);
 
-interface ToolDef { name: string; pillar: string; purpose: string; cmd?: string; args?: string[]; chrome?: boolean; s3?: boolean; }
+interface ToolDef { name: string; pillar: string; purpose: string; cmd?: string; args?: string[]; chrome?: boolean; s3?: boolean; db?: boolean; }
 export interface ToolStatus { name: string; pillar: string; purpose: string; present: boolean; version?: string; }
 
 const TOOLS: ToolDef[] = [
@@ -23,6 +23,7 @@ const TOOLS: ToolDef[] = [
   { name: "otel-cli", pillar: "runtime", purpose: "exec spans (OTel)", cmd: "otel-cli", args: ["--version"] },
   { name: "playwright", pillar: "frontend", purpose: "web traces", cmd: "playwright", args: ["--version"] },
   { name: "s3", pillar: "storage", purpose: "upload recordings (S3_ENDPOINT)", s3: true },
+  { name: "postgres", pillar: "storage", purpose: "persist sessions (DATABASE_URL) — required for `trace serve`", db: true },
 ];
 
 /** DoctorCommand — probes every backing tool and reports presence + version, grouped by pillar. */
@@ -41,6 +42,12 @@ export class DoctorCommand {
     if (t.s3) {
       const ep = process.env.S3_ENDPOINT || process.env.AWS_S3_ENDPOINT;
       return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: !!ep, version: ep ?? undefined };
+    }
+    if (t.db) {
+      const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+      // Redact credentials before surfacing the connection string.
+      const shown = url?.replace(/\/\/[^@/]*@/, "//***@");
+      return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: !!url, version: shown ?? undefined };
     }
     if (t.chrome) {
       const p = DoctorCommand.chromePath();
