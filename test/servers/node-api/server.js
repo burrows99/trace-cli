@@ -1,63 +1,99 @@
-// A tiny zero-dependency Node API to trace. Run under the inspector and point `trace dynamic --node` at it:
-//
-//   node --inspect=9229 test/servers/node-api/server.js
-//   trace dynamic --node \
-//     --curl 'curl -s "http://localhost:3000/price?qty=3&code=SAVE10"' \
-//     --bp test/servers/node-api/server.js@'const total' \
-//     --expr 'rate' --expr 'subtotal'
-//
-// The business logic mirrors test/servers/python-api/server.py line-for-line so the SAME trace shape works
-// across languages — a demo of protocol-pluggable, language-agnostic backend tracing (CDP here, DAP there).
-
+// Node order-API / BFF for the end-to-end demo. It validates a cart, applies a coupon, then calls the
+// Python tax service (cross-tier), and returns the order total. Several bugs are planted on purpose so the
+// tracer has something to reveal — see the BUG comments. Run under the inspector:
+//   PORT=3100 node --inspect=9230 test/servers/node-api/server.js
 import { createServer } from "node:http";
 
+const CATALOG = {
+  widget: { price: 9.99, stock: 100 },
+  gadget: { price: 24.5, stock: 3 },
+  gizmo: { price: 4.0, stock: 0 },          // out of stock
+};
+const COUPONS = { SAVE10: 0.10, HALF: 0.5, VIP: 0.2 };
+const TAX_SVC = process.env.TAX_SVC || "http://127.0.0.1:3101";
+
+// ---- original price demo (kept) ---------------------------------------------------------------
 const DISCOUNTS = { SAVE10: 0.10, HALF: 0.5 };
-
-function discount(code) {
-  return DISCOUNTS[code] ?? 0;
-}
-
+function discount(code) { return DISCOUNTS[code] ?? 0; }
 function priceFor(qty, unit, code) {
   const subtotal = qty * unit;
   const rate = discount(code);
   const total = subtotal * (1 - rate);
   return { subtotal, rate, total: Math.round(total * 100) / 100 };
 }
-
-// A loop that accumulates a cart total — `total` MUTATES across iterations. Breakpoint the inner line with
-// --max-hits and watch `total`/`count` to see mutation lineage (value-over-time), e.g.:
-//   trace dynamic --node <port> --max-hits 10 \
-//     --curl 'curl -s "http://127.0.0.1:3100/cart?items=9.99,4.50,2.00"' \
-//     --bp "test/servers/node-api/server.js@total = total + price" --expr total --expr count
 function cartTotal(prices) {
   let total = 0;
   let count = 0;
   for (const price of prices) {
-    total = total + price;          // ← breakpoint: hits once per item, total grows each time
+    total = total + price;
     count = count + 1;
   }
   return { total: Math.round(total * 100) / 100, count };
 }
 
-const server = createServer((req, res) => {
+// ---- order pipeline (the e2e demo) ------------------------------------------------------------
+
+// lineItems(cart): cart is ["widget:2", "gadget:1"] → priced line items. Throws on an unknown sku.
+function lineItems(cart) {
+  const items = [];
+  for (const part of cart) {
+    const [sku, qtyStr] = part.split(":");
+    const product = CATALOG[sku];
+    if (!product) throw new Error(`unknown sku: ${sku}`);
+    const qty = Number(qtyStr || 1);
+    const lineTotal = product.price * qty;
+    items.push({ sku, qty, price: product.price, lineTotal });
+  }
+  return items;
+}
+
+// applyCoupon(subtotal, code): BUG — subtracts the discount RATE as a flat dollar amount instead of a
+// percentage. A $44.48 cart with SAVE10 should drop $4.45, but this only takes off $0.10.
+function applyCoupon(subtotal, code) {
+  const rate = COUPONS[code] || 0;
+  const discounted = subtotal - rate;          // BUG: should be subtotal * (1 - rate)
+  return { rate, discounted: Math.round(discounted * 100) / 100 };
+}
+
+// fetchTax(amount, region): cross-tier call to the Python tax service. Throws if it answers non-2xx.
+async function fetchTax(amount, region) {
+  const res = await fetch(`${TAX_SVC}/tax?amount=${amount}&region=${region}`);
+  if (!res.ok) throw new Error(`tax service ${res.status}`);
+  const body = await res.json();
+  return body.tax;
+}
+
+async function checkout(cart, coupon, region) {
+  const items = lineItems(cart);
+  let subtotal = 0;
+  for (const it of items) subtotal += it.lineTotal;
+  const { rate, discounted } = applyCoupon(subtotal, coupon);
+  const tax = await fetchTax(discounted, region);
+  const total = Math.round((discounted + tax) * 100) / 100;
+  return { items, subtotal, rate, discounted, tax, total };
+}
+
+const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
+  const json = (code, obj) => { res.statusCode = code; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(obj)); };
+
   if (url.pathname === "/price") {
     const qty = Number(url.searchParams.get("qty") || 1);
     const code = url.searchParams.get("code") || "";
-    const result = priceFor(qty, 9.99, code);
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(result));
-    return;
+    return json(200, priceFor(qty, 9.99, code));
   }
   if (url.pathname === "/cart") {
     const prices = (url.searchParams.get("items") || "9.99,4.50,2.00").split(",").map(Number);
-    const result = cartTotal(prices);
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(result));
-    return;
+    return json(200, cartTotal(prices));
   }
-  res.statusCode = 404;
-  res.end("not found");
+  if (url.pathname === "/checkout") {
+    const cart = (url.searchParams.get("cart") || "widget:2,gadget:1").split(",");
+    const coupon = url.searchParams.get("coupon") || "";
+    const region = url.searchParams.get("region") || "US";
+    try { return json(200, await checkout(cart, coupon, region)); }
+    catch (e) { return json(502, { error: e.message }); }   // cascades a tax-service failure
+  }
+  json(404, { error: "not found" });
 });
 
 const port = Number(process.env.PORT || 3000);

@@ -1,15 +1,29 @@
-// A React component traced via the Chrome (CDP) target. The traceable price logic lives in ./price.ts so
-// its breakpoint resolves through a clean esbuild source map; App.tsx just renders the result.
+// Checkout cart rendered via React, traced through Chrome (CDP). The displayed total is computed by the
+// buggy displayTotal() in ./price.ts, so the trace shows the cents being dropped per line item.
 
-import { priceFor } from "./price";
+import { displayTotal, type Line } from "./price";
 
-export function App({ qty, code }: { qty: number; code: string }) {
-  const { subtotal, rate, total } = priceFor(qty, 9.99, code);
+const CART: Line[] = [
+  { sku: "widget", qty: 2, lineTotal: 19.98 },
+  { sku: "gadget", qty: 1, lineTotal: 24.50 },
+  { sku: "trinket", qty: 3, lineTotal: 7.50 },
+];
+
+export function App() {
+  const shown = displayTotal(CART);
+  const correct = CART.reduce((s, i) => s + i.lineTotal, 0);
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", padding: 40 }}>
-      <h1>Price</h1>
-      <p>qty {qty} · code {code}</p>
-      <p>subtotal {subtotal} · rate {rate} · <b>total {total}</b></p>
+      <h1>Checkout</h1>
+      <ul>
+        {CART.map((it) => (
+          <li key={it.sku}>{it.sku} ×{it.qty} — ${it.lineTotal.toFixed(2)}</li>
+        ))}
+      </ul>
+      <p>
+        <b>Total: ${shown}</b>{" "}
+        <span style={{ color: "#c0392b" }}>(should be ${correct.toFixed(2)})</span>
+      </p>
     </div>
   );
 }
