@@ -1,0 +1,7 @@
+node_modules/
+*.log
+npm-debug.log*
+
+# trace artifacts / local output
+*.trace.json
+.DS_Store

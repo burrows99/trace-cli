@@ -1,0 +1,14 @@
+{
+  "name": "trace-oss",
+  "description": "General-purpose CDP execution tracer — the `trace` CLI + usage skill.",
+  "owner": {
+    "name": "Raunak Burrows"
+  },
+  "plugins": [
+    {
+      "name": "trace",
+      "source": ".",
+      "description": "Set breakpoints + fire a trigger (curl or Chrome navigation) → a full execution trace, over the Chrome DevTools Protocol. Adds the `trace` binary to PATH."
+    }
+  ]
+}
