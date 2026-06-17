@@ -5,6 +5,7 @@
 
 import { traceNode, traceChrome, tracePython } from "../engine/trace.js";
 import { makeEnvelope, event, newSessionId } from "../schema/envelope.js";
+import { computeLineage } from "../core/lineage.js";
 
 // The collector that produced an event, by target. CDP for the JS family, DAP for everything else.
 const SOURCE_OF = { node: "cdp", chrome: "cdp", python: "dap" };
@@ -32,9 +33,12 @@ export function dynamicEnvelope(result, { args = {}, startedAtMs, sessionId = ne
   for (const b of (result.breakpoints || []).filter((b) => !b.bound)) {
     diagnostics.push({ level: "warn", code: "BP_UNBOUND", message: `${b.file}:${b.line} did not bind${b.note ? " — " + b.note : ""}` });
   }
+  const events = (result.hits || []).map((h) => hitToEvent(h, { source, sessionId }));
+  const lineage = computeLineage(events);            // derived: how watched values mutated as flow continued
   const data = {
     breakpoints: result.breakpoints || [],
-    events: (result.hits || []).map((h) => hitToEvent(h, { source, sessionId })),
+    events,
+    ...(lineage.length ? { lineage } : {}),
     ...(result.response ? { response: result.response } : {}),
     ...(result.console ? { console: result.console } : {}),
     ...(result.network ? { network: result.network } : {}),

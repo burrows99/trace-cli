@@ -61,6 +61,14 @@
   .stack div { font-family: var(--mono); font-size: 11.5px; color: var(--muted); padding: 1px 0; }
   .stack div b { color: var(--text); font-weight: 500; }
   pre.resp { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11.5px; overflow-x: auto; margin: 0; }
+  .mutations { padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .mutations > h4 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .mrow { display: flex; align-items: baseline; gap: 12px; padding: 3px 0; font-family: var(--mono); font-size: 12px; }
+  .mname { color: var(--amber); min-width: 130px; }
+  .mpath { flex: 1; color: var(--muted); word-break: break-all; }
+  .mpath .chg { color: var(--text); }
+  .mpath .arr { color: var(--border); padding: 0 2px; }
+  .mcount { color: var(--muted); font-size: 11px; white-space: nowrap; }
   .diag { font-size: 12px; padding: 6px 20px; }
   .diag.error { color: var(--red); } .diag.warn { color: var(--amber); }
   .diag.error::before { content: "✗ "; } .diag.warn::before { content: "⚠ "; }
@@ -119,6 +127,21 @@ function kvTable(obj) {
   return `<table class="kv">${ks.map((k) => `<tr><td class="k">${esc(k)}</td><td class="v">${esc(typeof obj[k] === "object" ? JSON.stringify(obj[k]) : obj[k])}</td></tr>`).join("")}</table>`;
 }
 
+function renderMutations(lineage) {
+  if (!lineage || !lineage.length) return "";
+  const fmt = (v) => esc(typeof v === "object" ? JSON.stringify(v) : v);
+  const rows = lineage.map((tr) => {
+    const path = [];
+    tr.series.forEach((s, i) => { if (s.changed || i === 0) path.push(`<span class="${s.changed ? "chg" : ""}">${fmt(s.value)}</span>`); });
+    return `<div class="mrow">
+      <span class="mname">${tr.kind === "expr" ? "⊢" : "•"} ${esc(tr.name)}</span>
+      <span class="mpath">${path.join('<span class="arr">→</span>')}</span>
+      <span class="mcount">${tr.changes} chg / ${tr.occurrences} hits</span>
+    </div>`;
+  }).join("");
+  return `<div class="mutations"><h4>mutations · how values changed as flow continued</h4>${rows}</div>`;
+}
+
 function renderEvent(e) {
   const a = e.attrs || {};
   const secs = [];
@@ -160,6 +183,7 @@ async function select(id) {
       ${t.trigger ? `<div class="trigger">${esc(t.trigger)}</div>` : ""}
     </div>
     ${(env.diagnostics || []).map((g) => `<div class="diag ${g.level}">${esc(g.message)}</div>`).join("")}
+    ${renderMutations(d.lineage)}
     <div class="events">${(d.events || []).map(renderEvent).join("") || '<div class="empty">no events</div>'}</div>
     ${extras.join("")}`;
 }

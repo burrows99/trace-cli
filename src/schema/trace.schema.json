@@ -126,6 +126,31 @@
         "parentSpanId": { "type": "string" }
       }
     },
+    "Lineage": {
+      "type": "object",
+      "description": "derived: how one watched value mutated across the event timeline (value-over-time)",
+      "required": ["name", "kind", "series"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "enum": ["expr", "local"] },
+        "occurrences": { "type": "integer" },
+        "changes": { "type": "integer" },
+        "series": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["seq", "value"],
+            "properties": {
+              "seq": { "type": "integer" },
+              "t": { "type": ["number", "string"] },
+              "loc": { "$ref": "#/$defs/Loc" },
+              "value": {},
+              "changed": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
     "Diagnostic": {
       "type": "object",
       "required": ["level", "code", "message"],

@@ -24,12 +24,34 @@ function priceFor(qty, unit, code) {
   return { subtotal, rate, total: Math.round(total * 100) / 100 };
 }
 
+// A loop that accumulates a cart total — `total` MUTATES across iterations. Breakpoint the inner line with
+// --max-hits and watch `total`/`count` to see mutation lineage (value-over-time), e.g.:
+//   trace dynamic --node <port> --max-hits 10 \
+//     --curl 'curl -s "http://127.0.0.1:3100/cart?items=9.99,4.50,2.00"' \
+//     --bp "test/servers/node-api/server.js@total = total + price" --expr total --expr count
+function cartTotal(prices) {
+  let total = 0;
+  let count = 0;
+  for (const price of prices) {
+    total = total + price;          // ← breakpoint: hits once per item, total grows each time
+    count = count + 1;
+  }
+  return { total: Math.round(total * 100) / 100, count };
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/price") {
     const qty = Number(url.searchParams.get("qty") || 1);
     const code = url.searchParams.get("code") || "";
     const result = priceFor(qty, 9.99, code);
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(result));
+    return;
+  }
+  if (url.pathname === "/cart") {
+    const prices = (url.searchParams.get("items") || "9.99,4.50,2.00").split(",").map(Number);
+    const result = cartTotal(prices);
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(result));
     return;

@@ -96,11 +96,18 @@ span, and a UI action all become `Event`s on one timeline, each tagged with its 
       "loc": { "file": "app.py", "line": 42 }, "label": "price_for", "t": 12,
       "attrs": { "stack": [ "…" ], "locals": { }, "exprs": { } }
     } ],
+    "lineage": [ { "name": "total", "kind": "expr", "changes": 2,
+      "series": [ { "seq": 1, "value": 0 }, { "seq": 2, "value": 9.99, "changed": true } ] } ],
     "response": { "exitCode": 0, "body": "…" }
   },
   "diagnostics": []
 }
 ```
+
+**Mutation lineage** (`data.lineage`) is a *derived* view computed in the normalization tier: for every
+watched value, the ordered series of how it changed as flow continued (`total: 0 → 9.99 → 14.49`) — so an
+agent sees value-over-time, not just per-hit snapshots. It surfaces in `--format human`, the JSON envelope,
+and the live UI. (Empty when nothing mutates, e.g. a single-hit trace.)
 
 Print the full JSON Schema with `trace schema` — it's at
 [`src/schema/trace.schema.json`](src/schema/trace.schema.json).

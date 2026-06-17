@@ -16,7 +16,7 @@ import { runDoctor, renderDoctor } from "./commands/doctor.js";
 import { runServe, emitEnvelope } from "./commands/serve.js";
 import { checkBreakpoint, checkPython } from "./engine/trace.js";
 import { parseBpSpec } from "./engine/breakpoints.js";
-import { renderTrace } from "./engine/render.js";
+import { renderTrace, renderLineage } from "./engine/render.js";
 import { renderVideo } from "./engine/record.js";
 import { VERSION } from "./schema/envelope.js";
 
@@ -80,7 +80,7 @@ async function dynamicAction(o) {
   }
 
   const { result, envelope } = await runDynamic(opts);
-  emit(envelope, () => renderTrace(result), o);
+  emit(envelope, () => renderTrace(result) + renderLineage(envelope.data.lineage), o);
 
   const collector = o.emit || process.env.TRACE_COLLECTOR_URL;
   if (collector) await emitEnvelope(collector, envelope);

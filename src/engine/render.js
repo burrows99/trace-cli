@@ -1,6 +1,19 @@
 // renderTrace(result): the human-readable execution trace (string). Generalized from the original
 // engine's emit block — vendor-neutral (no member/auth/login specifics).
 
+import { lineageSummary } from "../core/lineage.js";
+
+// renderLineage(lineage): a compact "mutations" section — how watched values changed as flow continued.
+// Computed in the normalization tier (core/lineage.js) and passed in from the envelope.
+export function renderLineage(lineage) {
+  if (!lineage?.length) return "";
+  const L = ["\n── mutations (how values changed as flow continued) ──"];
+  for (const tr of lineage) {
+    L.push(`   ${tr.kind === "expr" ? "⊢" : "•"} ${tr.name}: ${lineageSummary(tr)}   (${tr.changes} change${tr.changes === 1 ? "" : "s"} / ${tr.occurrences} hits)`);
+  }
+  return L.join("\n");
+}
+
 export function renderTrace(out) {
   const fmt = (v) => {
     const s = typeof v === "string" ? v : JSON.stringify(v);
