@@ -245,13 +245,18 @@ normalizes to one `Event`, and `Event`s are the **asset** (videos are an *output
 
 | Don't build | Borrow | Do build (the differentiation) |
 |---|---|---|
-| a debugger / custom wire protocol | DAP (`@vscode/debugadapter-testsupport`), CDP | the **unified Event schema** |
+| a custom wire protocol | DAP via `@vscode/debugadapter-testsupport`, CDP via `chrome-remote-interface` | the **unified Event schema** |
 | a storage engine | SQLite → ClickHouse (at scale) | **cross-language correlation** |
 | a tracing format | OpenTelemetry (spans/attrs/exporters) | the **replay / agent-analysis** layer |
 
-This is why the DAP driver wraps Microsoft's official `DebugClient` instead of hand-rolling the protocol,
-why every `Event` now carries `source` (`cdp`/`dap`/`terminal`/`otel`) and a `sessionId`, and why the
-envelope is shaped to map cleanly onto OTel spans (`traceId`/`spanId`/`parentSpanId` already reserved).
+The line between **infrastructure to own** vs **infrastructure to borrow**: own `EventEnvelope` /
+`TraceRecorder` / `SessionManager` / `ReplayEngine` and the *environment-specific* bits libraries can't
+generalize (target discovery — `resolveWsUrl` — differs per Chrome/Node/Electron/k8s/CI); borrow CDP & DAP
+transport, storage, and tracing. This is why **both** protocol drivers are now thin wrappers — the DAP
+driver over Microsoft's `DebugClient`, the CDP driver over `chrome-remote-interface` — instead of
+hand-rolling WebSocket framing, request ids, and event routing; why every `Event` carries `source`
+(`cdp`/`dap`/`terminal`/`otel`) and a `sessionId`; and why the envelope maps cleanly onto OTel spans
+(`traceId`/`spanId`/`parentSpanId` already reserved).
 
 **Deferred to "platform" stage (captured here, intentionally NOT built yet):** ClickHouse/Redis storage,
 OTel exporters, event-sourced (rr-style) replay, eBPF. Today's scope stays a Node CLI emitting the event
@@ -266,8 +271,9 @@ stream to stdout/`--json`; these slot in behind the same schema when scale deman
 - ✅ **Contract:** `src/schema/{envelope.js,trace.schema.json}` — envelope + shared shapes
   (`Loc`/`Symbol`/`Metric`/`Graph`/`Event`), `Event` now `source`- and `sessionId`-tagged. 8 contract tests.
 - ✅ **Restructure:** engine moved to `src/engine/`; `src/commands/`, `src/adapters/`, `src/schema/` added.
-- ✅ **Protocol-pluggable engine:** CDP driver (`cdp.js`, Node/Chrome) + **DAP driver (`dap.js`) over the
-  official `DebugClient`** (Python/debugpy; any DAP adapter). One trigger+capture loop (`trace.js`).
+- ✅ **Protocol-pluggable engine:** CDP driver (`cdp.js`, Node/Chrome) **over `chrome-remote-interface`** +
+  DAP driver (`dap.js`) **over the official `DebugClient`** (Python/debugpy; any DAP adapter). We own
+  discovery + RemoteObject/variable rendering; the libraries own the wire. One trigger+capture loop (`trace.js`).
 - ✅ **CLI hard-cut:** `trace dynamic --node|--chrome|--python`, `trace doctor`, `trace schema`. Old flat
   `trace --port` interface removed (→ `trace dynamic --node`).
 - ✅ **Test servers:** `test/servers/{node-api,python-api}` with identical business logic — the SAME trace

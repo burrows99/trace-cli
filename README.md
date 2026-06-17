@@ -17,8 +17,9 @@ trace schema    ← the output JSON Schema (the contract)
 ```
 
 It is **not coupled to any project** — ports, triggers, breakpoint files, and the source root all come from
-flags. Runs on plain Node (≥ 18); the DAP path uses Microsoft's official `@vscode/debugadapter-testsupport`
-client (no hand-rolled protocol).
+flags. Runs on plain Node (≥ 18). Both transports are delegated to maintained clients —
+**CDP via `chrome-remote-interface`**, **DAP via `@vscode/debugadapter-testsupport`** — so the project owns
+only target discovery and the event model, not the wire protocol.
 
 ## Trace any backend, any language
 

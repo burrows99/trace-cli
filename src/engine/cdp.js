@@ -1,5 +1,9 @@
-// CDP WebSocket client + target discovery. Dependency-free: Node 18+ global WebSocket/fetch.
-// `connect()` and `renderRO()` are lifted (vendor-neutral) from the original debug engine.
+// CDP driver. We OWN the environment-specific parts — target discovery (listTargets/resolveWsUrl) and the
+// RemoteObject renderer (renderRO) — and DELEGATE the wire protocol (WebSocket transport, message framing,
+// request ids, pending promises, event dispatch) to chrome-remote-interface, the maintained CDP client.
+// Symmetric with dap.js, which wraps the official DAP client. See docs/MIGRATION.md §8.
+
+import CDP from "chrome-remote-interface";
 
 const log = (...a) => console.error("[trace]", ...a);
 export { log };
@@ -27,50 +31,38 @@ export async function resolveWsUrl(port, { kind = "node", urlMatch, titleMatch }
   return t.webSocketDebuggerUrl;
 }
 
-// connect(wsUrl): open a CDP session. Returns { send, on, waitForPaused, hasQueued, script(s), close }.
+// connect(wsUrl): open a CDP session on the given WebSocket URL (we resolved it via resolveWsUrl, the
+// app-specific bit CRI can't generalize). Returns the same shape as dap.js's driver:
+// { send, on, waitForPaused, hasQueued, interrupt, scriptUrl, script, scripts, close }. We keep a small
+// scriptParsed cache + a paused-event queue on top of CRI so the engine's capture loop is protocol-agnostic.
 export async function connect(wsUrl) {
-  const ws = new WebSocket(wsUrl);
-  let nextId = 1;
-  const pending = new Map();
+  let client;
+  try {
+    client = await CDP({ target: wsUrl, local: true });   // local: use the bundled protocol, no extra fetch
+  } catch (e) {
+    throw new Error(`cannot connect to ${wsUrl} — ${e.message}`);
+  }
+
   const scripts = new Map();
-  const listeners = new Map();
   const pausedQueue = [];
   let pausedWaiter = null;
 
-  ws.addEventListener("message", (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pending.has(m.id)) {
-      const { res, rej } = pending.get(m.id);
-      pending.delete(m.id);
-      return m.error ? rej(new Error(m.error.message || JSON.stringify(m.error))) : res(m.result);
-    }
-    if (m.method === "Debugger.scriptParsed" && m.params?.url) scripts.set(m.params.scriptId, m.params);
-    if (m.method === "Debugger.paused") {
-      if (pausedWaiter) { const w = pausedWaiter; pausedWaiter = null; w(m.params); }
-      else pausedQueue.push(m.params);
-    }
-    if (m.method) { const set = listeners.get(m.method); if (set) for (const cb of set) cb(m.params); }
+  client.on("Debugger.scriptParsed", (p) => { if (p?.url) scripts.set(p.scriptId, p); });
+  client.on("Debugger.paused", (p) => {
+    if (pausedWaiter) { const w = pausedWaiter; pausedWaiter = null; w(p); }
+    else pausedQueue.push(p);
   });
 
-  await new Promise((res, rej) => {
-    ws.addEventListener("open", res);
-    ws.addEventListener("error", () => rej(new Error(`cannot connect to ${wsUrl}`)));
-  });
-
-  const send = (method, params = {}) => new Promise((res, rej) => {
-    const id = nextId++;
-    pending.set(id, { res, rej });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
   const waitForPaused = (ms) => new Promise((res, rej) => {
     if (pausedQueue.length) return res(pausedQueue.shift());
     const t = setTimeout(() => { pausedWaiter = null; rej(new Error("timeout")); }, ms);
     pausedWaiter = (p) => { clearTimeout(t); res(p); };
   });
-  const on = (method, cb) => { if (!listeners.has(method)) listeners.set(method, new Set()); listeners.get(method).add(cb); };
 
   return {
-    send, on, waitForPaused,
+    send: (method, params = {}) => client.send(method, params),
+    on: (method, cb) => client.on(method, cb),
+    waitForPaused,
     hasQueued: () => pausedQueue.length > 0,
     // interrupt(): unblock a pending waitForPaused with null — used when the trigger finishes so we don't
     // sit out the full timeout waiting for a pause that will never come.
@@ -78,7 +70,7 @@ export async function connect(wsUrl) {
     scriptUrl: (id) => scripts.get(id)?.url,
     script: (id) => scripts.get(id),
     scripts: () => scripts,
-    close: () => { try { ws.close(); } catch {} },
+    close: () => { try { client.close(); } catch {} },
   };
 }
 

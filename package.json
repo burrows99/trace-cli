@@ -28,6 +28,7 @@
   "dependencies": {
     "@vscode/debugadapter-testsupport": "^1.68.0",
     "@vscode/debugprotocol": "^1.68.0",
+    "chrome-remote-interface": "^0.34.0",
     "commander": "^12.1.0",
     "source-map": "^0.7.4"
   },
