@@ -13,14 +13,17 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Install production deps first so they cache across source changes.
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# Install deps first so they cache across source changes (--ignore-scripts: skip `prepare` until src exists).
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci --ignore-scripts
 
 # App source (only what the CLI/collector needs — test fixtures are excluded via .dockerignore).
 COPY bin ./bin
 COPY src ./src
 COPY README.md LICENSE ./
+
+# Compile the TypeScript (class-first build) → dist/, which bin/trace runs.
+RUN npm run build
 
 # Persist sessions to a mounted volume.
 ENV TRACE_DATA=/data

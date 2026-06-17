@@ -10,8 +10,10 @@ import { SourceMaps } from "../dist/engine/SourceMaps.js";
 import { Recorder } from "../dist/engine/Recorder.js";
 
 test("Loc.parse handles file:line, file:line:col, <native>", () => {
-  assert.deepEqual({ ...Loc.parse("src/a.ts:42") }, { file: "src/a.ts", line: 42 });
-  assert.deepEqual({ ...Loc.parse("src/a.ts:42:7") }, { file: "src/a.ts", line: 42, col: 7 });
+  const a = Loc.parse("src/a.ts:42");
+  assert.ok(a instanceof Loc); assert.equal(a.file, "src/a.ts"); assert.equal(a.line, 42);
+  const b = Loc.parse("src/a.ts:42:7");
+  assert.equal(b.line, 42); assert.equal(b.col, 7);
   assert.equal(Loc.parse("<native>"), undefined);
 });
 

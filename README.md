@@ -114,21 +114,31 @@ agent sees value-over-time, not just per-hit snapshots. It surfaces in the human
 and the live UI. (Empty when nothing mutates, e.g. a single-hit trace.)
 
 Print the full JSON Schema with `trace schema` — it's at
-[`src/schema/trace.schema.json`](src/schema/trace.schema.json).
+[`src/shared/trace.schema.json`](src/shared/trace.schema.json).
 
-## As a library
+## As a library (class-first, TypeScript)
 
-```js
-import { traceNode, tracePython, dynamicEnvelope } from "trace-cli";
+The codebase is TypeScript with a class-first / domain-driven layout (`domain/` entities, `transport/`
+drivers, `engine/`, `analysis/`, `storage/`, `collector/`, `cli/`). Build with `npm run build`, then:
 
-const result = await tracePython({
+```ts
+import { DynamicCommand, Trace } from "trace-cli";
+
+const { trace } = await new DynamicCommand().run({
+  target: "python",
   port: 5678,
   curl: 'curl -s http://127.0.0.1:3001/price?qty=3',
   breakpoints: ["app/service.py:42"],
   root: "/path/to/project",
 });
-const envelope = dynamicEnvelope(result);   // → the unified envelope
+
+const envelope = trace.toJSON();          // domain Trace → wire JSON
+const errors = trace.validate();          // class-validator (class-first contract)
+const restored = Trace.fromPlain(envelope); // rehydrate a stored envelope into entities
 ```
+
+Lower-level building blocks are exported too: `Tracer`, `CdpDriver`/`DapDriver` (`ProtocolDriver`),
+`LineageAnalyzer`, `S3ArtifactStore` (`ArtifactStore`), `Collector`/`FileSessionStore` (`SessionStore`).
 
 ## As a Claude Code plugin
 
