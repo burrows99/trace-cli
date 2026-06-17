@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// trace — CLI entry point. Thin launcher; logic lives in src/cli.js so the same code is reachable as a
-// library too. Referenced by package.json "bin" and placed on PATH by the Claude Code plugin.
-import { run } from "../src/cli.js";
-run();
+// trace — CLI entry point. Thin launcher; the class-first application lives in src/ (TypeScript) and is
+// compiled to dist/. `dist/cli/main.js` imports reflect-metadata first, then runs the Cli.
+import "../dist/cli/main.js";

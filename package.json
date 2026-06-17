@@ -6,12 +6,14 @@
   "bin": {
     "trace": "bin/trace"
   },
-  "main": "./src/index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./dist/index.js"
   },
   "files": [
     "bin",
+    "dist",
     "src",
     "skills",
     ".claude-plugin",
@@ -25,7 +27,8 @@
     "trace": "node bin/trace",
     "build": "tsc && cp src/collector/ui.html dist/collector/ui.html && cp src/shared/trace.schema.json dist/shared/trace.schema.json",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.js"
+    "prepare": "npm run build",
+    "test": "npm run build && node --test test/*.test.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1071.0",
