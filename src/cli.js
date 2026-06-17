@@ -15,7 +15,7 @@ function buildProgram() {
   return new Command()
     .name("trace")
     .description("Execution tracer over the Chrome DevTools Protocol — breakpoints + a trigger → a full trace.")
-    .version("0.1.0")
+    .version("0.1.1")
     .option("--port <n>", "Node --inspect port (Node target; default 9229)", int)
     .option("--chrome <n>", "Chrome --remote-debugging-port (selects the Chrome target)", int)
     .option("--curl <cmd>", "Node trigger: a curl command run once breakpoints are set")

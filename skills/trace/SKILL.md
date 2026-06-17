@@ -1,7 +1,7 @@
 ---
 name: trace
 description: Get a full execution trace through a running app via the `trace` CLI — set breakpoints at file:line, fire a trigger (a curl command for a Node `--inspect` target, or a page navigation for a Chrome `--remote-debugging-port` target), and read back every hit with its call stack, locals, watched expressions and timing. Use for "trace this request/route", "what runs when I hit /endpoint", "step through this function", "why is this value X here", "set a breakpoint and show the trace". Vendor-neutral: pass the port, the trigger, and the breakpoints — nothing is hardcoded.
-allowed-tools: Bash(trace:*), Bash(node:*), Read
+allowed-tools: Bash(node:*), Read
 ---
 
 # trace — execution tracer over the Chrome DevTools Protocol
@@ -12,16 +12,24 @@ target already listening:
 - **Node**: start the process with `--inspect` (e.g. `node --inspect=9229 …`), then use `--port 9229`.
 - **Chrome**: start Chrome with `--remote-debugging-port=9222`, then use `--chrome 9222 --url <page>`.
 
+## Invoking (do this first)
+Run the bundled binary by its **explicit install path** — Claude substitutes `${CLAUDE_PLUGIN_ROOT}` to this
+plugin's directory. Do **not** use the bare name `trace`: it collides with macOS's `/usr/bin/trace` (plugin
+`bin/` is appended to PATH, so the system one wins). Set a shorthand once, then use `$trace` everywhere:
+```bash
+trace="node ${CLAUDE_PLUGIN_ROOT}/bin/trace"
+```
+
 ## Usage
 ```bash
 # Node target — trigger is a curl command run after the breakpoints bind
-trace --port 9229 \
+$trace --port 9229 \
   --curl 'curl -s http://localhost:3002/v1/dashboard -H "Cookie: sid=…"' \
   --bp src/dashboard/dashboard.service.ts:149 \
   --bp 'src/foo.ts@unique substring on the line'        # line number OR a unique substring
 
 # Chrome target — trigger is navigating to the route + reloading
-trace --chrome 9222 --url http://localhost:3000/some/route \
+$trace --chrome 9222 --url http://localhost:3000/some/route \
   --bp src/pages/Thing.tsx:42 --shot /tmp/thing.png
 ```
 

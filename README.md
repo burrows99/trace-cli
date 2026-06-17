@@ -50,13 +50,17 @@ const result = await traceNode({
 
 ## As a Claude Code plugin
 
-This repo is also a [Claude Code plugin](https://code.claude.com/docs/en/plugins): installing it puts
-`trace` on the Bash tool's PATH and loads a usage skill.
+This repo is also a [Claude Code plugin](https://code.claude.com/docs/en/plugins): installing it bundles a
+usage skill and the `bin/` binary.
 
 ```bash
 claude plugin marketplace add /path/to/trace-cli
 claude plugin install trace@trace-oss
 ```
+
+The skill invokes the binary by its install path, `${CLAUDE_PLUGIN_ROOT}/bin/trace` (Claude substitutes the
+absolute path), rather than the bare name `trace` — plugin `bin/` is *appended* to PATH, so a system binary
+(notably macOS's `/usr/bin/trace`) would otherwise shadow it.
 
 ## How it works
 
