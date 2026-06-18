@@ -1,9 +1,9 @@
-import { existsSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
 import { logger } from "../../shared/logger.js";
+import { findProjectRoot } from "../../shared/projectRoot.js";
 import { createCodeGraphProvider } from "../../codegraph/createCodeGraphProvider.js";
 import type { CodeGraph, EntryRef, GraphEdge, GraphNode } from "../../codegraph/CodeGraphProvider.js";
 import { TraceCommand } from "./TraceCommand.js";
@@ -120,19 +120,5 @@ export class GraphCommand extends TraceCommand<GraphRequest> {
 
     walk(graph.entry, "", "", undefined);
     return head.concat(lines).join("\n");
-  }
-}
-
-const ROOT_MARKERS = ["tsconfig.json", "jsconfig.json", "package.json", ".git"];
-
-/** Auto-detect the project root: the nearest ancestor of `file` containing a project marker, else its dir. */
-function findProjectRoot(file: string): string {
-  const start = dirname(file);
-  let dir = start;
-  for (;;) {
-    if (ROOT_MARKERS.some((m) => existsSync(join(dir, m)))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) return start; // reached the filesystem root with no marker
-    dir = parent;
   }
 }

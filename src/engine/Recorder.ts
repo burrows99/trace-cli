@@ -1,20 +1,14 @@
-import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CdpDriver } from "../transport/CdpDriver.js";
 import { Cdp } from "../transport/cdp.js";
+import { ChromeLauncher } from "./ChromeLauncher.js";
 import { ffmpeg, concatInput, h264Mp4, FRAMES_LIST_FILE } from "./ffmpeg.js";
 import type { TraceEvent } from "../domain/TraceEvent.js";
 import { sleep } from "../shared/sleep.js";
 
 const OW = 1360, OH = 860;
-const CHROME_CANDIDATES = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
-].filter(Boolean) as string[];
 
 const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const oneLine = (v: unknown) => { const s = typeof v === "string" ? v : JSON.stringify(v); return (s == null ? String(v) : s).replace(/\s+/g, " ").slice(0, 240); };
@@ -48,16 +42,6 @@ export class Recorder {
   static #caption(e: TraceEvent): string {
     const a = attrsOf(e);
     return `#${e.seq}  ${a.cls ? a.cls + "." : ""}${e.label}  ${locStr(e)}${String(e.kind).startsWith("step") ? "  [" + e.kind + "]" : ""}`;
-  }
-
-  static async #launchRenderChrome(): Promise<{ port: number; kill(): void }> {
-    const bin = CHROME_CANDIDATES.find((p) => existsSync(p));
-    if (!bin) throw new Error("no Chrome found for frame rendering (set CHROME_BIN)");
-    const port = 9700 + (process.pid % 250);
-    const profile = mkdtempSync(join(tmpdir(), "trace-render-profile-"));
-    const proc = spawn(bin, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--force-device-scale-factor=1", "about:blank"], { stdio: "ignore" });
-    for (let i = 0; i < 60; i++) { try { await (await fetch(`http://localhost:${port}/json/version`)).json(); break; } catch { await sleep(100); } }
-    return { port, kill() { try { proc.kill("SIGKILL"); } catch { /* ignore */ } try { rmSync(profile, { recursive: true, force: true }); } catch { /* ignore */ } } };
   }
 
   static async #renderFrame(driver: CdpDriver, html: string, out: string): Promise<void> {
@@ -96,7 +80,7 @@ export class Recorder {
     const MAX = 160;
     const pick = frames.length > MAX ? Array.from({ length: MAX }, (_, i) => frames[Math.floor(i * (frames.length / MAX))]) : frames;
     const dir = mkdtempSync(join(tmpdir(), "trace-journey-"));
-    const chrome = await Recorder.#launchRenderChrome();
+    const chrome = await ChromeLauncher.launch(["--force-device-scale-factor=1"]);
     let driver: CdpDriver | undefined;
     try {
       const targets = await (await fetch(`http://localhost:${chrome.port}/json`)).json() as any[];
