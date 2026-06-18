@@ -5,8 +5,9 @@ import { Diagnostic } from "../../domain/Diagnostic.js";
 import { logger } from "../../shared/logger.js";
 import { findProjectRoot } from "../../shared/projectRoot.js";
 import { createCodeGraphProvider } from "../../codegraph/createCodeGraphProvider.js";
-import type { CodeGraph, EntryRef, GraphEdge, GraphNode } from "../../codegraph/CodeGraphProvider.js";
+import type { CodeGraph, EntryRef } from "../../codegraph/CodeGraphProvider.js";
 import { TraceCommand } from "./TraceCommand.js";
+import { renderGraphHtml, renderGraphTree } from "./graphView.js";
 
 const log = logger.child({ component: "graph" });
 const MAX_NODES = 2000; // internal safety cap on graph size; --depth is the user-facing size knob
@@ -71,54 +72,12 @@ export class GraphCommand extends TraceCommand<GraphRequest> {
   /** Human view: the call graph unrolled into a flow tree, with shared callees, cycles and externals marked. */
   render(trace: Trace): string {
     const graph = trace.data.graph as CodeGraph | undefined;
-    if (!graph || !graph.nodes?.length) {
-      const err = trace.diagnostics.find((d) => d.level === "error");
-      return err ? `graph — failed: ${err.message}` : "graph — no nodes";
-    }
+    const guard = this.emptyRender(trace, !!graph?.nodes?.length, "graph", "no nodes");
+    return guard !== undefined ? guard : renderGraphTree(graph!);
+  }
 
-    const byId = new Map<string, GraphNode>(graph.nodes.map((n) => [n.id, n]));
-    const adj = new Map<string, GraphEdge[]>();
-    for (const e of graph.edges) (adj.get(e.from) ?? adj.set(e.from, []).get(e.from)!).push(e);
-
-    const root = byId.get(graph.entry);
-    const head = [
-      `graph — ${root?.label ?? graph.entry}  (${root?.loc.file}:${root?.loc.line})  via ${graph.provider}`,
-      `  ${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
-        (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
-        (graph.stats.truncated ? " · truncated" : ""),
-      "",
-    ];
-
-    const lines: string[] = [];
-    const onPath = new Set<string>();
-    const emitted = new Set<string>();
-
-    const label = (n: GraphNode, weight?: number): string => {
-      const w = weight && weight > 1 ? ` ×${weight}` : "";
-      if (n.scope !== "local") return `${n.label}  ⊗ ${n.scope}${w}`;
-      return `${n.label}  ${n.loc.file}:${n.loc.line}${w}`;
-    };
-
-    const walk = (id: string, prefix: string, connector: string, weight: number | undefined): void => {
-      const n = byId.get(id);
-      if (!n) return;
-      const cycle = onPath.has(id);
-      const kids = adj.get(id) ?? [];
-      const shared = emitted.has(id) && kids.length > 0;
-      const tag = cycle ? "  ↻ cycle" : shared ? "  → shared" : "";
-      lines.push(`${prefix}${connector}${label(n, weight)}${tag}`);
-      if (cycle || shared) return; // back-edge / already-expanded: reference only, don't recurse
-      emitted.add(id);
-      onPath.add(id);
-      const childPrefix = connector ? prefix + (connector.startsWith("└") ? "   " : "│  ") : prefix;
-      kids.forEach((e, i) => {
-        const last = i === kids.length - 1;
-        walk(e.to, childPrefix, last ? "└─ " : "├─ ", e.weight);
-      });
-      onPath.delete(id);
-    };
-
-    walk(graph.entry, "", "", undefined);
-    return head.concat(lines).join("\n");
+  /** HTML view: the same call graph as an interactive node-and-edge diagram (see {@link renderGraphHtml}). */
+  renderHtml(trace: Trace): string {
+    return renderGraphHtml(trace);
   }
 }

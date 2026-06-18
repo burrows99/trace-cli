@@ -1,10 +1,7 @@
 import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
-import { logger } from "../../shared/logger.js";
-import { runTool } from "../../shared/runTool.js";
-import { TraceCommand } from "./TraceCommand.js";
-
-const log = logger.child({ component: "complexity" });
+import type { ToolRun } from "../../shared/runTool.js";
+import { ShellAnalysisCommand, type AnalysisOutcome, type ToolInvocation } from "./ShellAnalysisCommand.js";
 
 const CCN_WARN = 15; // lizard's default cyclomatic-complexity threshold
 
@@ -20,35 +17,34 @@ export interface ComplexityReport { functions: FnSymbol[]; stats: { functions: n
 
 /**
  * ComplexityCommand — the `static complexity` analysis: per-function cyclomatic complexity via `lizard --csv`.
- * Each function becomes a schema `Symbol` carrying `metrics` (ccn/nloc/params/tokens) under `data.complexity`.
- * Note lizard exits non-zero when functions breach its thresholds, so we parse stdout regardless of exit code
- * and only hard-fail when the process never started (e.g. lizard not installed).
+ * A {@link ShellAnalysisCommand}: the base owns the run/envelope/failure skeleton; this class supplies the
+ * lizard call and the CSV → Symbol normalization. Each function becomes a schema `Symbol` carrying `metrics`
+ * (ccn/nloc/params/tokens) under `data.complexity`. lizard exits non-zero merely to flag threshold breaches, so
+ * {@link nonZeroIsFailure} is false — we parse stdout regardless of exit code and only hard-fail when the
+ * process never started (e.g. lizard not installed).
  */
-export class ComplexityCommand extends TraceCommand<ComplexityRequest> {
-  async run(req: ComplexityRequest): Promise<Trace> {
-    const startedAtMs = this.started();
-    const diagnostics: Diagnostic[] = [];
-    let data = new TraceData({});
+export class ComplexityCommand extends ShellAnalysisCommand<ComplexityRequest> {
+  protected readonly tool = "lizard";
+  protected readonly command = "complexity.lizard";
+  protected readonly errorCode = "COMPLEXITY_FAILED";
+  protected readonly component = "complexity";
+  protected override nonZeroIsFailure(): boolean { return false; }
 
-    const res = await runTool("lizard", ["--csv", req.path], { cwd: req.root ?? process.cwd() });
-    if (res.code === null) {
-      // The process never produced an exit code — not installed, or timed out.
-      diagnostics.push(Diagnostic.error("COMPLEXITY_FAILED", res.error ?? "lizard did not run"));
-      log.error("lizard failed", { path: req.path, err: res.error });
-    } else {
-      const functions = ComplexityCommand.parseCsv(res.stdout);
-      if (!functions.length && !res.ok) {
-        diagnostics.push(Diagnostic.error("COMPLEXITY_FAILED", res.error ?? `lizard exited ${res.code} with no parseable output`));
-      } else {
-        const report = ComplexityCommand.summarize(functions);
-        data = new TraceData({ complexity: report });
-        if (report.stats.overThreshold) {
-          diagnostics.push(Diagnostic.warn("COMPLEXITY_HIGH", `${report.stats.overThreshold} function(s) over CCN ${CCN_WARN} (max ${report.stats.maxCcn})`));
-        }
-      }
+  protected invocation(req: ComplexityRequest): ToolInvocation {
+    return { argv: ["--csv", req.path], cwd: req.root ?? process.cwd() };
+  }
+
+  protected interpret(res: ToolRun): AnalysisOutcome {
+    const functions = ComplexityCommand.parseCsv(res.stdout);
+    if (!functions.length && !res.ok) {
+      // Non-zero exit with nothing parseable — a real error (bad path / unsupported language), not findings.
+      return { diagnostics: [Diagnostic.error(this.errorCode, res.error ?? `lizard exited ${res.code} with no parseable output`)] };
     }
-
-    return this.envelope({ command: "complexity.lizard", data, diagnostics, args: req.args ?? {}, startedAtMs });
+    const report = ComplexityCommand.summarize(functions);
+    const diagnostics = report.stats.overThreshold
+      ? [Diagnostic.warn("COMPLEXITY_HIGH", `${report.stats.overThreshold} function(s) over CCN ${CCN_WARN} (max ${report.stats.maxCcn})`)]
+      : [];
+    return { data: new TraceData({ complexity: report }), diagnostics };
   }
 
   /**
@@ -92,11 +88,10 @@ export class ComplexityCommand extends TraceCommand<ComplexityRequest> {
 
   /** Human view: functions sorted by CCN (worst first), threshold breaches flagged. */
   render(trace: Trace): string {
-    const r = trace.data.complexity as ComplexityReport | undefined;
-    if (!r || !r.functions?.length) {
-      const err = trace.diagnostics.find((d) => d.level === "error");
-      return err ? `complexity — failed: ${err.message}` : "complexity — no functions found";
-    }
+    const maybe = trace.data.complexity as ComplexityReport | undefined;
+    const guard = this.emptyRender(trace, !!maybe?.functions?.length, "complexity", "no functions found");
+    if (guard !== undefined) return guard;
+    const r = maybe!;
     const ccn = (f: FnSymbol) => f.metrics.find((m) => m.name === "ccn")?.value ?? 0;
     const sorted = [...r.functions].sort((a, b) => ccn(b) - ccn(a));
     const lines = [`complexity — ${r.stats.functions} functions · max CCN ${r.stats.maxCcn} · avg ${r.stats.avgCcn}` + (r.stats.overThreshold ? ` · ${r.stats.overThreshold} over ${CCN_WARN}` : ""), ""];

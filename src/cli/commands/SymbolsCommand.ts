@@ -3,11 +3,8 @@ import { isAbsolute, resolve } from "node:path";
 
 import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
-import { logger } from "../../shared/logger.js";
-import { runTool } from "../../shared/runTool.js";
-import { TraceCommand } from "./TraceCommand.js";
-
-const log = logger.child({ component: "symbols" });
+import type { ToolRun } from "../../shared/runTool.js";
+import { ShellAnalysisCommand, type AnalysisOutcome, type ToolInvocation } from "./ShellAnalysisCommand.js";
 
 export interface SymbolsRequest {
   file: string;           // a single source file
@@ -33,42 +30,39 @@ const NAME_LINE = /name:\s*\((?:identifier|type_identifier|property_identifier|f
 
 /**
  * SymbolsCommand — the `static symbols` analysis: top-level definitions in a file via `tree-sitter parse`.
- * tree-sitter emits node *types* + positions but not source text, so we read the file and slice each
- * definition's name-identifier span to recover its name. Each becomes a schema `Symbol` under `data.symbols`.
- * Best-effort + grammar-dependent: when tree-sitter (or the language grammar) is absent, it degrades to a
- * SYMBOLS_FAILED diagnostic on a well-formed Trace.
+ * A {@link ShellAnalysisCommand}: the base owns the run/envelope/failure skeleton; this class supplies the
+ * tree-sitter call and the S-expression → Symbol normalization. tree-sitter emits node *types* + positions but
+ * not source text, so {@link interpret} re-reads the file and slices each definition's name-identifier span to
+ * recover its name. tree-sitter exits non-zero on a missing grammar / parse error rather than a hard crash, so
+ * {@link nonZeroIsFailure} is false and only a process that never ran (`code === null`) is fatal; an unreadable
+ * file or a non-zero exit with no parseable output degrades to a SYMBOLS_FAILED diagnostic on a well-formed Trace.
  */
-export class SymbolsCommand extends TraceCommand<SymbolsRequest> {
-  async run(req: SymbolsRequest): Promise<Trace> {
-    const startedAtMs = this.started();
-    const diagnostics: Diagnostic[] = [];
-    let data = new TraceData({});
+export class SymbolsCommand extends ShellAnalysisCommand<SymbolsRequest> {
+  protected readonly tool = "tree-sitter";
+  protected readonly command = "symbols.tree-sitter";
+  protected readonly errorCode = "SYMBOLS_FAILED";
+  protected readonly component = "symbols";
+  protected override nonZeroIsFailure(): boolean { return false; }
 
-    const root = req.root ?? process.cwd();
-    const abs = isAbsolute(req.file) ? req.file : resolve(root, req.file);
+  /** Resolve the request's file against its root (or cwd). */
+  #abs(req: SymbolsRequest): string {
+    return isAbsolute(req.file) ? req.file : resolve(req.root ?? process.cwd(), req.file);
+  }
+
+  protected invocation(req: SymbolsRequest): ToolInvocation {
+    return { argv: ["parse", this.#abs(req)], cwd: req.root ?? process.cwd() };
+  }
+
+  protected interpret(res: ToolRun, req: SymbolsRequest): AnalysisOutcome {
     let source: string;
-    try {
-      source = readFileSync(abs, "utf8");
-    } catch (e: any) {
-      diagnostics.push(Diagnostic.error("SYMBOLS_FAILED", `cannot read ${req.file}: ${String(e?.message ?? e).split("\n")[0]}`));
-      return this.envelope({ command: "symbols.tree-sitter", data, diagnostics, args: req.args ?? {}, startedAtMs });
+    try { source = readFileSync(this.#abs(req), "utf8"); }
+    catch (e: any) { throw new Error(`cannot read ${req.file}: ${String(e?.message ?? e).split("\n")[0]}`); }
+    const symbols = SymbolsCommand.parseSexp(res.stdout, source, req.file);
+    if (!symbols.length && !res.ok) {
+      // No symbols and a non-zero exit usually means "no grammar for this file type" or a parse error.
+      return { diagnostics: [Diagnostic.error(this.errorCode, res.error || res.stderr.split("\n")[0] || `tree-sitter exited ${res.code}`)] };
     }
-
-    const res = await runTool("tree-sitter", ["parse", abs], { cwd: root });
-    if (res.code === null) {
-      diagnostics.push(Diagnostic.error("SYMBOLS_FAILED", res.error ?? "tree-sitter did not run"));
-      log.error("tree-sitter failed", { file: req.file, err: res.error });
-    } else {
-      const symbols = SymbolsCommand.parseSexp(res.stdout, source, req.file);
-      if (!symbols.length && !res.ok) {
-        // No symbols and a non-zero exit usually means "no grammar for this file type" or a parse error.
-        diagnostics.push(Diagnostic.error("SYMBOLS_FAILED", res.error || res.stderr.split("\n")[0] || `tree-sitter exited ${res.code}`));
-      } else {
-        data = new TraceData({ symbols: { file: req.file, symbols } as SymbolReport });
-      }
-    }
-
-    return this.envelope({ command: "symbols.tree-sitter", data, diagnostics, args: req.args ?? {}, startedAtMs });
+    return { data: new TraceData({ symbols: { file: req.file, symbols } as SymbolReport }) };
   }
 
   /**
@@ -101,11 +95,10 @@ export class SymbolsCommand extends TraceCommand<SymbolsRequest> {
 
   /** Human view: definitions grouped by kind, in source order. */
   render(trace: Trace): string {
-    const r = trace.data.symbols as SymbolReport | undefined;
-    if (!r || !r.symbols?.length) {
-      const err = trace.diagnostics.find((d) => d.level === "error");
-      return err ? `symbols — failed: ${err.message}` : "symbols — no definitions found";
-    }
+    const maybe = trace.data.symbols as SymbolReport | undefined;
+    const guard = this.emptyRender(trace, !!maybe?.symbols?.length, "symbols", "no definitions found");
+    if (guard !== undefined) return guard;
+    const r = maybe!;
     const lines = [`symbols — ${r.symbols.length} definitions in ${r.file}`, ""];
     for (const s of r.symbols) lines.push(`  ${s.kind.padEnd(10)} ${s.name}  :${s.loc.line}`);
     return lines.join("\n");

@@ -1,5 +1,8 @@
 import { Command, CommanderError } from "commander";
 import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { DynamicCommand, type DynamicTargetKind } from "./commands/DynamicCommand.js";
 import { GraphCommand } from "./commands/GraphCommand.js";
@@ -119,6 +122,13 @@ export class Cli {
     });
 
     emit(trace, () => cmd.render(trace), o);
+    // --html [path] → also write the interactive call-graph diagram (force-directed nodes + edges). Bare flag →
+    // a temp file; the path is logged to stderr (like --json <path>) so stdout stays the pure envelope/human channel.
+    if (o.html != null) {
+      const htmlPath = typeof o.html === "string" ? o.html : join(tmpdir(), `trace-graph-${randomUUID()}.html`);
+      writeFileSync(htmlPath, cmd.renderHtml(trace));
+      log.info("graph HTML written", { path: htmlPath });
+    }
     const collector = process.env.TRACE_COLLECTOR_URL;
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
@@ -135,7 +145,13 @@ export class Cli {
   async #runDeps(o: any): Promise<void> {
     if (!o.entry) usage("static deps needs --entry <file|dir>");
     const cmd = new DepsCommand();
-    const trace = await cmd.run({ entry: o.entry, root: o.root, args: { entry: o.entry, ...(o.root ? { root: o.root } : {}) } });
+    const trace = await cmd.run({
+      entry: o.entry,
+      root: o.root,
+      extensions: o.ext,
+      tsConfig: o.tsconfig,
+      args: { entry: o.entry, ...(o.root ? { root: o.root } : {}) },
+    });
     await this.#finish(trace, () => cmd.render(trace), o);
   }
 
@@ -187,6 +203,7 @@ export class Cli {
       .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git above the entry)")
       .option("--server <cmd>", "override the LSP server (default: auto by file extension; bundled typescript-language-server for TS/JS, e.g. \"gopls\", \"pyright --stdio\")")
       .option("--depth <n>", "max call depth expanded from the entry", int, 6)
+      .option("--html [path]", "also write an interactive call-graph diagram — nodes & edges, force-directed (to a file if a path is given, else a temp file)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((o) => this.#runGraph(o));
 
@@ -194,6 +211,8 @@ export class Cli {
       .description("module-import graph (+ circular-dependency groups) via madge")
       .requiredOption("--entry <path>", "file or directory whose import graph to build")
       .option("--root <dir>", "working directory for madge (default: cwd)")
+      .option("--ext <list>", "comma-separated file extensions to scan (default: ts,tsx,js,jsx,mjs,cjs)")
+      .option("--tsconfig <path>", "tsconfig for path-alias resolution (default: auto-detected near root/entry)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((o) => this.#runDeps(o));
 

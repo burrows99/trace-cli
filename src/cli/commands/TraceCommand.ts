@@ -54,6 +54,18 @@ export abstract class TraceCommand<Req = void, Res = Trace> extends CliCommand<R
     });
   }
 
+  /**
+   * Shared empty/error guard for `render()`. When the trace has no usable payload, returns the one-line human
+   * string every command rendered the same way — `"<label> — failed: <msg>"` if a diagnostic is an error,
+   * else `"<label> — <emptyNote>"`. Returns `undefined` when a payload IS present, so the caller renders it.
+   * Collapses the copy that lived in graph/deps/complexity/symbols into one place.
+   */
+  protected emptyRender(trace: Trace, hasPayload: boolean, label: string, emptyNote: string): string | undefined {
+    if (hasPayload) return undefined;
+    const err = trace.diagnostics.find((d) => d.level === "error");
+    return err ? `${label} — failed: ${err.message}` : `${label} — ${emptyNote}`;
+  }
+
   /** The human-readable view of a finished Trace (what prints when `--json` is off). */
   abstract render(trace: Trace): string;
 }

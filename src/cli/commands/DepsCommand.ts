@@ -1,14 +1,20 @@
+import { existsSync } from "node:fs";
+import { dirname, isAbsolute, join, parse, resolve } from "node:path";
+
 import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
-import { logger } from "../../shared/logger.js";
-import { runTool } from "../../shared/runTool.js";
-import { TraceCommand } from "./TraceCommand.js";
+import type { ToolRun } from "../../shared/runTool.js";
+import { ShellAnalysisCommand, type AnalysisOutcome, type ToolInvocation } from "./ShellAnalysisCommand.js";
 
-const log = logger.child({ component: "deps" });
+// madge defaults to scanning js/jsx only — on a TS/NestJS repo that finds zero modules. Cover the common
+// source extensions by default so `deps` works on TS, TSX and ESM/CJS projects without extra flags.
+const DEFAULT_EXTENSIONS = "ts,tsx,js,jsx,mjs,cjs";
 
 export interface DepsRequest {
   entry: string;          // a file or directory to analyze
   root?: string;          // cwd for madge (default: process.cwd())
+  extensions?: string;    // comma-separated file extensions madge should scan (default: DEFAULT_EXTENSIONS)
+  tsConfig?: string;      // tsconfig for path-alias resolution (default: auto-detected near root/entry)
   args?: Record<string, unknown>;
 }
 
@@ -17,34 +23,35 @@ interface DepEdge { from: string; to: string; kind: string; }
 export interface DepGraph { entry?: string; nodes: DepNode[]; edges: DepEdge[]; stats: { modules: number; edges: number; circular: number }; }
 
 /**
- * DepsCommand — the `static deps` analysis: a module-import graph via `madge --json`. Mirrors GraphCommand
- * (the call graph): own the use-case + the envelope, shell out to the analyzer, and a tool/parse failure
- * becomes an error diagnostic on a still-well-formed Trace. The payload conforms to the schema `Graph` $def
- * (nodes/edges) under `data.deps`, distinct from `data.graph` (which is the *call* graph).
+ * DepsCommand — the `static deps` analysis: a module-import graph via `madge --json`. A {@link
+ * ShellAnalysisCommand}: the base owns the run/envelope/failure skeleton; this class supplies the madge call
+ * ({@link invocation}) and the JSON → Graph normalization ({@link interpret}). The payload conforms to the
+ * schema `Graph` $def (nodes/edges) under `data.deps`, distinct from `data.graph` (which is the *call* graph).
  */
-export class DepsCommand extends TraceCommand<DepsRequest> {
-  async run(req: DepsRequest): Promise<Trace> {
-    const startedAtMs = this.started();
-    const diagnostics: Diagnostic[] = [];
-    let data = new TraceData({});
+export class DepsCommand extends ShellAnalysisCommand<DepsRequest> {
+  protected readonly tool = "madge";
+  protected readonly command = "deps.madge";
+  protected readonly errorCode = "DEPS_FAILED";
+  protected readonly component = "deps";
 
-    const res = await runTool("madge", ["--json", req.entry], { cwd: req.root ?? process.cwd() });
-    if (!res.ok) {
-      diagnostics.push(Diagnostic.error("DEPS_FAILED", res.error ?? `madge exited ${res.code}`));
-      log.error("madge failed", { entry: req.entry, err: res.error });
-    } else {
-      try {
-        const deps = DepsCommand.toGraph(JSON.parse(res.stdout) as Record<string, string[]>, req.entry);
-        data = new TraceData({ deps });
-        if (deps.stats.circular) {
-          diagnostics.push(Diagnostic.warn("DEPS_CIRCULAR", `${deps.stats.circular} circular dependency group(s) — run with madge --circular for the chains`));
-        }
-      } catch (e: any) {
-        diagnostics.push(Diagnostic.error("DEPS_FAILED", `could not parse madge output: ${String(e?.message ?? e).split("\n")[0]}`));
-      }
-    }
+  protected invocation(req: DepsRequest): ToolInvocation {
+    const cwd = req.root ?? process.cwd();
+    const extensions = req.extensions ?? DEFAULT_EXTENSIONS;
+    // A tsconfig lets madge resolve path aliases (e.g. `@/foo`); auto-detect one so the common case needs no flag.
+    const tsConfig = req.tsConfig ?? findTsConfig(cwd, req.entry);
+    const argv = ["--json", "--extensions", extensions, ...(tsConfig ? ["--ts-config", tsConfig] : []), req.entry];
+    return { argv, cwd, args: { ...(req.args ?? {}), extensions, ...(tsConfig ? { tsConfig } : {}) } };
+  }
 
-    return this.envelope({ command: "deps.madge", data, diagnostics, args: req.args ?? {}, startedAtMs });
+  protected interpret(res: ToolRun, req: DepsRequest): AnalysisOutcome {
+    let map: Record<string, string[]>;
+    try { map = JSON.parse(res.stdout) as Record<string, string[]>; }
+    catch (e: any) { throw new Error(`could not parse madge output: ${String(e?.message ?? e).split("\n")[0]}`); }
+    const deps = DepsCommand.toGraph(map, req.entry);
+    const diagnostics = deps.stats.circular
+      ? [Diagnostic.warn("DEPS_CIRCULAR", `${deps.stats.circular} circular dependency group(s) — run with madge --circular for the chains`)]
+      : [];
+    return { data: new TraceData({ deps }), diagnostics };
   }
 
   /** Normalize madge's `{ module: [imports] }` JSON into the schema Graph shape + a circular-group count (SCCs > 1). */
@@ -57,11 +64,10 @@ export class DepsCommand extends TraceCommand<DepsRequest> {
 
   /** Human view: one block per module with its imports, cycles flagged in the header. */
   render(trace: Trace): string {
-    const g = trace.data.deps as DepGraph | undefined;
-    if (!g || !g.nodes?.length) {
-      const err = trace.diagnostics.find((d) => d.level === "error");
-      return err ? `deps — failed: ${err.message}` : "deps — no modules";
-    }
+    const maybe = trace.data.deps as DepGraph | undefined;
+    const guard = this.emptyRender(trace, !!maybe?.nodes?.length, "deps", "no modules");
+    if (guard !== undefined) return guard; // no payload → guard is the rendered line; else the graph is present
+    const g = maybe!;
     const adj = new Map<string, string[]>();
     for (const e of g.edges) (adj.get(e.from) ?? adj.set(e.from, []).get(e.from)!).push(e.to);
     const lines = [
@@ -74,6 +80,25 @@ export class DepsCommand extends TraceCommand<DepsRequest> {
       outs.forEach((to, i) => lines.push(`  ${i === outs.length - 1 ? "└─" : "├─"} ${to}`));
     }
     return lines.join("\n");
+  }
+}
+
+/**
+ * Find the nearest `tsconfig.json` for madge's `--ts-config` (path-alias resolution): check the madge cwd
+ * first, then walk up from the entry's directory to the filesystem root. Returns undefined when none exists
+ * (a plain JS project) — madge then runs without alias resolution, which is correct for non-TS code.
+ */
+function findTsConfig(cwd: string, entry: string): string | undefined {
+  const atCwd = join(cwd, "tsconfig.json");
+  if (existsSync(atCwd)) return atCwd;
+  let dir = isAbsolute(entry) ? entry : resolve(cwd, entry);
+  // entry may be a file or a directory; start the walk from its containing directory either way.
+  if (existsSync(dir) && !existsSync(join(dir, "tsconfig.json"))) dir = dirname(dir);
+  const stop = parse(dir).root;
+  for (let d = dir; ; d = dirname(d)) {
+    const candidate = join(d, "tsconfig.json");
+    if (existsSync(candidate)) return candidate;
+    if (d === stop) return undefined;
   }
 }
 
