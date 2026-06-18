@@ -1,19 +1,11 @@
 # All-in-one demo image. This single container IS the whole end-to-end demo: it bundles the trace CLI,
-# Node, Python + debugpy, a headless Chromium (the Recorder also renders the React replay frames with it)
-# and ffmpeg (encodes the mp4). At runtime it starts the Node/Python/React/Chrome targets on its own
-# loopback, waits for them + the collector, then runs test/servers/scenarios.sh, emitting each trace.
-#
-# Base = OFFICIAL CPython, NOT node:22-slim + apt python3. Debian's apt-built CPython is a build that
-# pydevd's native thread-attach helper rejects ("unsupported python vm"), so debugpy can't instrument the
-# multi-threaded tax service and `trace dynamic --python` hangs at attach. The python.org/docker build works.
-FROM python:3.12-slim
+# Node, a headless Chromium (the Recorder also renders the React replay frames with it) and ffmpeg (encodes
+# the mp4). At runtime it starts the Node/React/Chrome targets on its own loopback, waits for them + the
+# collector, then runs test/servers/scenarios.sh, emitting each trace.
+FROM node:22-slim
 
-# Node 22 (the trace CLI + node-api + Vite) via NodeSource; chromium + ffmpeg for the Chrome trace & video;
-# debugpy for the Python tax service. python3 stays the image's official /usr/local/bin/python3 (3.12).
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs chromium ffmpeg \
-    && pip install --no-cache-dir debugpy \
+# chromium + ffmpeg for the Chrome trace & video recording; curl for the readiness probes in run.sh.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates chromium ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium won't run as root without --no-sandbox. The Recorder spawns Chrome via $CHROME_BIN, so point

@@ -1,30 +1,23 @@
 #!/usr/bin/env bash
 # All-in-one demo entrypoint. This single container IS the whole demo: it starts every target on its own
 # loopback (one container = one network namespace, so each server is on 127.0.0.1 exactly as scenarios.sh
-# expects), waits for them + the collector, then runs all 5 scenarios once and exits. Replaces the old
-# six-service demo group (node-api / python-api / react-app / chrome + a shared-netns anchor + this runner).
+# expects), waits for them + the collector, then runs all scenarios once and exits.
 set -u
 C="${TRACE_COLLECTOR_URL:-http://trace-collector:4747}"
 
 echo "[demo] starting targets…"
 
-# 1) Node order-API / BFF (:3100) under the inspector (:9230). No deps — pure node:http.
-PORT=3100 TAX_SVC=http://127.0.0.1:3101 \
+# 1) Node order-API / BFF (:3100) under the inspector (:9230). No deps — pure node:http, tax computed locally.
+PORT=3100 \
   node --inspect=9230 test/servers/node-api/server.js &
 
-# 2) Python tax service (:3101), debugpy on :5679. debugpy.listen() doesn't block, so it's traceable at once.
-#    -Xfrozen_modules=off is REQUIRED: on Python 3.11+ the frozen stdlib makes debugpy miss breakpoints, so
-#    the tracer would hang with 0 hits. (PYDEVD_DISABLE_FILE_VALIDATION=1 just silences the paired warning.)
-PYDEVD_DISABLE_FILE_VALIDATION=1 PORT=3101 DEBUG_PORT=5679 \
-  python3 -Xfrozen_modules=off test/servers/python-api/server.py &
-
-# 3) React/Vite checkout UI (:5180). The app source is bind-mounted read-only and vite writes a cache, so
-#    serve from a writable copy. Same files → same source maps, so scenario #5's `--root test/servers/
+# 2) React/Vite checkout UI (:5180). The app source is bind-mounted read-only and vite writes a cache, so
+#    serve from a writable copy. Same files → same source maps, so the chrome scenario's `--root test/servers/
 #    react-app` breakpoint still resolves. --host 0.0.0.0: bind all interfaces (vite defaults to ::1).
 cp -r test/servers/react-app /tmp/react-app
 ( cd /tmp/react-app && npm install --no-audit --no-fund && npm run dev -- --host 0.0.0.0 ) &
 
-# 4) Headless Chrome being traced (CDP :9334).
+# 3) Headless Chrome being traced (CDP :9334).
 /usr/bin/chromium --headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu \
   --remote-debugging-port=9334 --remote-debugging-address=127.0.0.1 \
   --remote-allow-origins='*' --user-data-dir=/tmp/chrome-trace about:blank &
@@ -38,14 +31,9 @@ wait_tcp() { local port="$1" name="$2"; for _ in $(seq 1 120); do
 
 echo "[demo] waiting for targets + collector…"
 wait_http "http://127.0.0.1:3100/price?qty=1"             "node-api"     || exit 1
-wait_http "http://127.0.0.1:3101/tax?amount=10&region=US" "python-api"   || exit 1
 wait_http "http://127.0.0.1:5180/"                        "react-app"    || exit 1
 wait_http "http://127.0.0.1:9334/json/version"            "chrome"       || exit 1
 wait_tcp  9230 "node --inspect"                                          || exit 1
-# Do NOT wait_tcp 5679 (debugpy): a raw TCP probe is consumed by debugpy.listen() as its single client
-# connection, so the real tracer then hangs forever at the DAP `initialized` handshake. The python-api HTTP
-# check above already proves debugpy is up — server.py calls debugpy.listen() BEFORE serve_forever(), so a
-# 200 on :3101 ⇒ :5679 is already listening. (node --inspect/CDP tolerates the probe; debugpy does not.)
 wait_http "$C/api/sessions"                               "collector"    || exit 1
 
 echo "[demo] all targets ready — running scenarios → $C"

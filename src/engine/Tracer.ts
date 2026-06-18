@@ -1,9 +1,7 @@
 import { exec } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import { isAbsolute, join, relative } from "node:path";
 
 import { CdpDriver, renderRemoteObject, log } from "../transport/CdpDriver.js";
-import { DapDriver } from "../transport/DapDriver.js";
 import { SourceMaps } from "./SourceMaps.js";
 import { BreakpointResolver, type ResolvedBp } from "./BreakpointResolver.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
@@ -32,7 +30,6 @@ export interface CaptureResult {
 
 export interface TraceOptions {
   port: number;
-  host?: string;
   wsUrl?: string;
   breakpoints?: string[];
   root?: string;
@@ -41,8 +38,8 @@ export interface TraceOptions {
   frames?: number;
   maxHits?: number;
   timeoutMs?: number;
+  attachTimeoutMs?: number;
   reqTimeoutMs?: number;
-  settleMs?: number;
   curl?: string;
   url?: string;
   shot?: string;
@@ -54,7 +51,6 @@ export interface TraceOptions {
 }
 
 interface CdpCtx { t0: number; events: TraceEvent[]; frames: number; exprs: string[]; steps: string[]; sm: SourceMaps; bpById: Map<string, { file: string; line: number }>; sessionId?: string; }
-interface DapCtx { t0: number; events: TraceEvent[]; frames: number; exprs: string[]; root?: string; bpById: Map<number, { file: string; line: number }>; sessionId?: string; }
 
 function runCurl(cmd: string, ms: number): Promise<CurlResult> {
   return new Promise((res) => {
@@ -67,8 +63,8 @@ function runCurl(cmd: string, ms: number): Promise<CurlResult> {
 const hostOf = (u: string) => { try { return new URL(u).host; } catch { return u; } };
 
 /**
- * Tracer — the trigger+capture engine. Depends on ProtocolDriver implementations (CdpDriver/DapDriver) via
- * DIP; one capture-loop shape across Node (CDP), Chrome (CDP), and Python (DAP). Produces domain entities
+ * Tracer — the trigger+capture engine. Depends on the CdpDriver (ProtocolDriver) via DIP; one capture-loop
+ * shape across Node (CDP) and Chrome (CDP). Produces domain entities
  * (TraceEvent, Breakpoint) — the command layer assembles them into a Trace.
  */
 export class Tracer {
@@ -146,10 +142,10 @@ export class Tracer {
   }
 
   async traceNode(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = 9229, wsUrl, curl, breakpoints = [], root, exprs = [], steps = [], frames = 6, maxHits = 25, timeoutMs = 30000, reqTimeoutMs = 60000, urlMatch, titleMatch, sessionId } = opts;
+    const { port = 9229, wsUrl, curl, breakpoints = [], root, exprs = [], steps = [], frames = 6, maxHits = 25, timeoutMs = 30000, attachTimeoutMs = 8000, reqTimeoutMs = 60000, urlMatch, titleMatch, sessionId } = opts;
     const bps = BreakpointResolver.resolveAll(breakpoints, root);
     const result: CaptureResult = { target: "node", trigger: curl ?? null, breakpoints: [], events: [] };
-    const driver = await CdpDriver.connect(wsUrl || (await CdpDriver.resolveWsUrl(port, { kind: "node", urlMatch, titleMatch })));
+    const driver = await CdpDriver.connect(wsUrl || (await CdpDriver.resolveWsUrl(port, { kind: "node", urlMatch, titleMatch })), attachTimeoutMs);
     const sm = new SourceMaps(driver, root);
     const ctx: CdpCtx = { t0: performance.now(), events: result.events, frames, exprs, steps, sm, bpById: new Map(), sessionId };
     try {
@@ -188,12 +184,12 @@ export class Tracer {
   }
 
   async traceChrome(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = 9222, wsUrl, url, breakpoints = [], root, exprs = [], steps = [], frames = 6, maxHits = 25, timeoutMs = 15000, urlMatch, shot, record = false, sessionId } = opts;
+    const { port = 9222, wsUrl, url, breakpoints = [], root, exprs = [], steps = [], frames = 6, maxHits = 25, timeoutMs = 15000, attachTimeoutMs = 8000, urlMatch, shot, record = false, sessionId } = opts;
     const waitMs = 3500;
     if (!url) throw new Error("traceChrome requires a page url");
     const bps = BreakpointResolver.resolveAll(breakpoints, root);
     const result: CaptureResult = { target: "chrome", trigger: url, breakpoints: [], events: [], console: [], network: [] };
-    const driver = await CdpDriver.connect(wsUrl || (await CdpDriver.resolveWsUrl(port, { kind: "chrome", urlMatch: urlMatch || hostOf(url) })));
+    const driver = await CdpDriver.connect(wsUrl || (await CdpDriver.resolveWsUrl(port, { kind: "chrome", urlMatch: urlMatch || hostOf(url) })), attachTimeoutMs);
     const sm = new SourceMaps(driver, root);
     const ctx: CdpCtx = { t0: performance.now(), events: result.events, frames, exprs, steps, sm, bpById: new Map(), sessionId };
     driver.on("Runtime.consoleAPICalled", (p: any) => { if (["error", "warning"].includes(p.type)) result.console!.push({ type: p.type, text: (p.args || []).map((a: any) => a.value ?? a.description ?? a.type).join(" ").slice(0, 300) }); });
@@ -243,110 +239,5 @@ export class Tracer {
 
   async #snap(driver: CdpDriver): Promise<string | null> {
     try { return (await driver.send("Page.captureScreenshot", { format: "png" })).data; } catch { return null; }
-  }
-
-  // ---- DAP (Python / any adapter) --------------------------------------------------------------
-
-  #relTo(root: string | undefined, abs?: string): string {
-    if (!abs) return "<native>";
-    const rel = relative(root || process.cwd(), abs);
-    return rel && !rel.startsWith("..") ? rel : abs;
-  }
-
-  #renderVar(v: any): unknown {
-    let s = v?.value ?? v?.result ?? "";
-    if (typeof s === "string" && s.length > 200) s = s.slice(0, 200) + "…";
-    return s;
-  }
-
-  async #setDapBreakpoints(driver: DapDriver, bps: ResolvedBp[], root: string | undefined, bpById: Map<number, { file: string; line: number }>): Promise<Breakpoint[]> {
-    const byFile = new Map<string, ResolvedBp[]>();
-    for (const bp of bps) {
-      const abs = isAbsolute(bp.file) ? bp.file : join(root || process.cwd(), bp.file);
-      if (!byFile.has(abs)) byFile.set(abs, []);
-      byFile.get(abs)!.push(bp);
-    }
-    const report: Breakpoint[] = [];
-    for (const [abs, fileBps] of byFile) {
-      let got: any[] = [];
-      try { const r = await driver.send("setBreakpoints", { source: { path: abs }, breakpoints: fileBps.map((b) => ({ line: b.line })) }); got = r.breakpoints || []; }
-      catch (e: any) { for (const b of fileBps) report.push(new Breakpoint({ file: b.file, line: b.line, bound: false, note: e.message })); continue; }
-      fileBps.forEach((b, i) => {
-        const g = got[i] || {};
-        const bound = !!g.verified;
-        if (g.id != null) bpById.set(g.id, { file: b.file, line: b.line });
-        report.push(new Breakpoint({ file: b.file, line: g.line ?? b.line, bound, note: g.message }));
-        log(`bp ${b.file}:${b.line} → ${bound ? "BOUND" : "pending"}`);
-      });
-    }
-    return report;
-  }
-
-  async #capturePy(driver: DapDriver, stopped: any, kind: string, ctx: DapCtx): Promise<TraceEvent> {
-    const st = await driver.send("stackTrace", { threadId: stopped.threadId, startFrame: 0, levels: ctx.frames });
-    const sf = st.stackFrames || [];
-    const top = sf[0];
-    const stack = sf.map((f: any) => `${f.name || "(anon)"} (${this.#relTo(ctx.root, f.source?.path)}:${f.line})`);
-    const locals: Record<string, unknown> = {};
-    if (top) {
-      let scopes: any[] = [];
-      try { scopes = (await driver.send("scopes", { frameId: top.id })).scopes || []; } catch { /* ignore */ }
-      const wantLocal = scopes.some((s) => /local/i.test(s.name));
-      for (const sc of scopes) {
-        if (sc.expensive) continue;
-        if (wantLocal && !/local/i.test(sc.name)) continue;
-        let vars: any[] = [];
-        try { vars = (await driver.send("variables", { variablesReference: sc.variablesReference })).variables || []; } catch { /* ignore */ }
-        for (const v of vars) if (!(v.name in locals) && !v.name.startsWith("__")) locals[v.name] = this.#renderVar(v);
-      }
-    }
-    const ex: Record<string, unknown> = {};
-    for (const e of ctx.exprs) {
-      try { ex[e] = this.#renderVar(await driver.send("evaluate", { expression: e, frameId: top?.id, context: "watch" })); }
-      catch (err: any) { ex[e] = `⟂ ${err.message}`; }
-    }
-    const labelBp = (stopped.hitBreakpointIds || []).map((id: number) => ctx.bpById.get(id)).filter(Boolean)[0];
-    const at = top ? `${this.#relTo(ctx.root, top.source?.path)}:${top.line}` : (labelBp ? `${labelBp.file}:${labelBp.line}` : stack[0]);
-    return new TraceEvent({
-      seq: ctx.events.length + 1, t: Math.round(performance.now() - ctx.t0), kind, source: "dap", sessionId: ctx.sessionId,
-      loc: Loc.parse(at), label: top?.name || "(anonymous)",
-      attrs: { stack, locals, ...(ctx.exprs.length ? { exprs: ex } : {}) },
-    });
-  }
-
-  async tracePython(opts: TraceOptions): Promise<CaptureResult> {
-    const { host = "127.0.0.1", port = 5678, curl, breakpoints = [], root, exprs = [], frames = 6, maxHits = 25, timeoutMs = 30000, reqTimeoutMs = 60000, settleMs = 1200, sessionId } = opts;
-    const bps = BreakpointResolver.resolveAll(breakpoints, root);
-    const result: CaptureResult = { target: "python", trigger: curl ?? null, breakpoints: [], events: [] };
-    const driver = await DapDriver.connect({ host, port });
-    const ctx: DapCtx = { t0: performance.now(), events: result.events, frames, exprs, root, bpById: new Map(), sessionId };
-    try {
-      const finishConfig = await driver.handshake({ adapterID: "debugpy" });
-      result.breakpoints = await this.#setDapBreakpoints(driver, bps, root, ctx.bpById);
-      await finishConfig();
-      await sleep(settleMs);
-      let triggerDone = !curl;
-      let triggerPromise: Promise<void> = Promise.resolve();
-      if (curl) {
-        ctx.t0 = performance.now();
-        log(`fired: ${curl.length > 90 ? curl.slice(0, 90) + "…" : curl}`);
-        triggerPromise = runCurl(curl, reqTimeoutMs).then((r) => { result.response = r; }).finally(() => { triggerDone = true; driver.interrupt(); });
-      }
-      while (result.events.length < maxHits) {
-        let stopped: any;
-        try { stopped = await driver.waitForStop(timeoutMs); } catch { break; }
-        if (!stopped) break;
-        result.events.push(await this.#capturePy(driver, stopped, "breakpoint", ctx));
-        await driver.send("continue", { threadId: stopped.threadId }).catch(() => {});
-        if (triggerDone && !driver.hasQueued()) break;
-      }
-      await triggerPromise.catch(() => {});
-    } catch (e: any) {
-      result.fatal = String(e?.stack || e?.message || e); log("FATAL", result.fatal.split("\n")[0]);
-    } finally {
-      try { await driver.send("disconnect", { restart: false, terminateDebuggee: false }); } catch { /* ignore */ }
-      driver.close();
-    }
-    return result;
   }
 }

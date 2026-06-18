@@ -9,9 +9,9 @@
 #   export S3_ENDPOINT=http://localhost:9000
 #   trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9 --emit http://localhost:4747
 #
-# Bringing the stack up runs the whole end-to-end demo too (Node + Python + React + Chrome targets, all in
+# Bringing the stack up runs the whole end-to-end demo too (Node + React + Chrome targets, all in
 # one demo container), no host setup — `docker compose up --build` starts everything; `docker compose down` stops it all:
-#   docker compose up --build                       # then watch all 5 traces (incl. the React video) at :4747
+#   docker compose up --build                       # then watch all 3 traces (incl. the React video) at :4747
 services:
   trace-collector:
     build: .
@@ -65,8 +65,8 @@ services:
 
   # ───────────────────────── demo (one container, comes up/down with the stack) ─────────────────────────
   # The whole self-contained run of test/servers/scenarios.sh, collapsed into ONE container. It starts the
-  # Node/Python/React apps being traced + a headless Chrome on its own loopback, waits for them and the
-  # collector, then drives all 5 scenarios once (uploading the React video to mock-aws) and exits. One
+  # Node/React apps being traced + a headless Chrome on its own loopback, waits for them and the
+  # collector, then drives all 3 scenarios once (uploading the React video to mock-aws) and exits. One
   # container = one network namespace, so every target is on 127.0.0.1 (exactly as the CLI's localhost
   # discovery expects) and all app/debug ports stay inside it — no shared-netns anchor, no host clashes.
   demo:

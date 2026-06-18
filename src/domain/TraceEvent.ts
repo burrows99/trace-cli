@@ -2,11 +2,11 @@ import { IsInt, IsObject, IsOptional, IsString } from "class-validator";
 import { Type } from "class-transformer";
 import { Loc } from "./Loc.js";
 
-export type EventSource = "cdp" | "dap" | "terminal" | "otel";
+export type EventSource = "cdp" | "terminal" | "otel";
 
 /**
- * TraceEvent — the timeline primitive. A CDP breakpoint hit, a DAP stop, an OTel span, and a UI action all
- * become TraceEvents on one timeline. `source` + `sessionId` make cross-source correlation expressible.
+ * TraceEvent — the timeline primitive. A CDP breakpoint hit, an OTel span, and a UI action all become
+ * TraceEvents on one timeline. `source` + `sessionId` make cross-source correlation expressible.
  */
 export class TraceEvent {
   @IsInt() seq: number;

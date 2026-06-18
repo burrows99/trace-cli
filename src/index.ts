@@ -9,7 +9,6 @@ export { BreakpointResolver } from "./engine/BreakpointResolver.js";
 export { Renderer } from "./engine/Renderer.js";
 export { Recorder } from "./engine/Recorder.js";
 export { CdpDriver } from "./transport/CdpDriver.js";
-export { DapDriver } from "./transport/DapDriver.js";
 export type { ProtocolDriver } from "./transport/ProtocolDriver.js";
 export { LineageAnalyzer } from "./analysis/LineageAnalyzer.js";
 export { S3ArtifactStore } from "./storage/S3ArtifactStore.js";

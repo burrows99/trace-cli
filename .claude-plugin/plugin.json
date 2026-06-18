@@ -1,6 +1,6 @@
 {
   "name": "trace",
-  "description": "Unified, language-agnostic execution tracer: set breakpoints, fire a trigger, get a full execution trace as one JSON envelope — Node/Chrome over CDP, Python over DAP/debugpy. Plus `trace serve` for a realtime web UI of all traces. Ships the `trace` CLI + a usage skill. Usable by any agent.",
+  "description": "Unified execution tracer: set breakpoints, fire a trigger, get a full execution trace as one JSON envelope — Node/Chrome over CDP. Plus `trace serve` for a realtime web UI of all traces. Ships the `trace` CLI + a usage skill. Usable by any agent.",
   "version": "0.3.0",
   "author": {
     "name": "Raunak Burrows"

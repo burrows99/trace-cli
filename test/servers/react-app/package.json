@@ -2,7 +2,7 @@
   "name": "react-app",
   "private": true,
   "type": "module",
-  "description": "Tiny Vite + React + TS app to trace via the Chrome (CDP) target. Same price logic as the node/python servers.",
+  "description": "Tiny Vite + React + TS app to trace via the Chrome (CDP) target. Same price logic as the node server.",
   "scripts": {
     "dev": "vite"
   },

@@ -19,7 +19,6 @@ const usage = (msg: string): never => { process.stderr.write(`trace: ${msg}\n`);
 
 function pickTarget(o: any): { target: DynamicTargetKind; port: number } {
   if (o.chrome != null) return { target: "chrome", port: o.chrome };
-  if (o.python !== undefined) return { target: "python", port: o.python === true ? 5678 : int(o.python) };
   return { target: "node", port: o.node === undefined || o.node === true ? 9229 : int(o.node) };
 }
 
@@ -47,11 +46,12 @@ export class Cli {
     if (!isChrome && !o.curl) usage(`${target} target needs --curl`);
 
     const { trace } = await this.#dynamic.run({
-      target, port, host: o.host,
+      target, port,
       breakpoints: o.bp, root: o.root, exprs: o.expr,
       steps: (o.steps || "").split(",").map((s: string) => s.trim()).filter(Boolean),
       frames: o.frames, maxHits: o.maxHits, wsUrl: o.ws,
       ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
+      ...(o.attachTimeoutMs ? { attachTimeoutMs: o.attachTimeoutMs } : {}),
       curl: o.curl, url: o.url, shot: o.shot,
       record: isChrome && o.record !== false,
       recordOut: typeof o.record === "string" ? o.record : undefined,
@@ -72,20 +72,19 @@ export class Cli {
       .showHelpAfterError("(add --help for usage)");
 
     program.command("dynamic")
-      .description("breakpoints + a trigger → a full execution trace (Node CDP · Chrome CDP · Python DAP)")
+      .description("breakpoints + a trigger → a full execution trace (Node CDP · Chrome CDP)")
       .option("--node [port]", "Node --inspect target (default; port 9229)")
       .option("--chrome <port>", "Chrome --remote-debugging-port target", int)
-      .option("--python [port]", "Python DAP/debugpy target (default port 5678)")
-      .option("--host <h>", "DAP host for --python (default 127.0.0.1)")
       .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring", collect, [])
       .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
-      .option("--curl <cmd>", "trigger for node/python: a command run once breakpoints are set")
+      .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")
       .option("--url <url>", "trigger for chrome: page URL to navigate + reload")
       .option("--root <dir>", "root for resolving relative --bp files (default cwd)")
       .option("--max-hits <n>", "stop after N hits", int, 25)
       .option("--frames <n>", "stack frames captured per hit", int, 6)
       .option("--steps <list>", "step plan at the first hit (node/chrome): over,into,out")
       .option("--timeout-ms <n>", "per-pause wait timeout", int)
+      .option("--attach-timeout-ms <n>", "fail fast if the debugger attach/connect stalls (default 8000)", int)
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .option("--emit <url>", "POST the envelope to a collector (env TRACE_COLLECTOR_URL); see `trace serve`")
       .option("--shot <png>", "chrome: write a screenshot to this path")

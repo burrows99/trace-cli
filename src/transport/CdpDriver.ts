@@ -1,5 +1,6 @@
 import CDP from "chrome-remote-interface";
 import type { ProtocolDriver } from "./ProtocolDriver.js";
+import { withDeadline } from "../shared/deadline.js";
 
 export const log = (...a: unknown[]) => console.error("[trace]", ...a);
 
@@ -26,10 +27,12 @@ export class CdpDriver implements ProtocolDriver {
     });
   }
 
-  static async connect(wsUrl: string): Promise<CdpDriver> {
+  static async connect(wsUrl: string, timeoutMs = 8000): Promise<CdpDriver> {
     let client: any;
-    try { client = await CDP({ target: wsUrl, local: true }); }
-    catch (e: any) { throw new Error(`cannot connect to ${wsUrl} — ${e.message}`); }
+    try {
+      client = await withDeadline(CDP({ target: wsUrl, local: true }), timeoutMs, () =>
+        `CDP connect to ${wsUrl} did not complete within ${timeoutMs}ms — the port accepts TCP but is not responding as a DevTools endpoint`);
+    } catch (e: any) { throw new Error(`cannot connect to ${wsUrl} — ${e.message}`); }
     return new CdpDriver(client);
   }
 
@@ -53,9 +56,15 @@ export class CdpDriver implements ProtocolDriver {
   scripts(): Map<string, ScriptInfo> { return this.#scripts; }
 
   // --- target discovery (custom; environment-specific — libraries can't generalize this) ---
-  static async listTargets(port: number, kind: "node" | "chrome"): Promise<any[]> {
+  static async listTargets(port: number, kind: "node" | "chrome", timeoutMs = 4000): Promise<any[]> {
     const route = kind === "chrome" ? "json" : "json/list";
-    const res = await fetch(`http://localhost:${port}/${route}`);
+    const where = kind === "chrome" ? "Chrome --remote-debugging-port" : "Node --inspect";
+    let res: Response;
+    try { res = await fetch(`http://localhost:${port}/${route}`, { signal: AbortSignal.timeout(timeoutMs) }); }
+    catch (e: any) {
+      const why = e?.name === "TimeoutError" ? `no HTTP response within ${timeoutMs}ms` : (e?.message || String(e));
+      throw new Error(`cannot reach the ${kind} inspector on :${port} (${why}) — is ${where} listening there?`);
+    }
     return (await res.json()) as any[];
   }
 

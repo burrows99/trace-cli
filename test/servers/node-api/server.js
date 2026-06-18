@@ -1,6 +1,6 @@
-// Node order-API / BFF for the end-to-end demo. It validates a cart, applies a coupon, then calls the
-// Python tax service (cross-tier), and returns the order total. Several bugs are planted on purpose so the
-// tracer has something to reveal — see the BUG comments. Run under the inspector:
+// Node order-API / BFF for the end-to-end demo. It validates a cart, applies a coupon, computes tax, and
+// returns the order total. Several bugs are planted on purpose so the tracer has something to reveal — see
+// the BUG comments. Run under the inspector:
 //   PORT=3100 node --inspect=9230 test/servers/node-api/server.js
 import { createServer } from "node:http";
 
@@ -10,7 +10,6 @@ const CATALOG = {
   gizmo: { price: 4.0, stock: 0 },          // out of stock
 };
 const COUPONS = { SAVE10: 0.10, HALF: 0.5, VIP: 0.2 };
-const TAX_SVC = process.env.TAX_SVC || "http://127.0.0.1:3101";
 
 // ---- original price demo (kept) ---------------------------------------------------------------
 const DISCOUNTS = { SAVE10: 0.10, HALF: 0.5 };
@@ -55,27 +54,27 @@ function applyCoupon(subtotal, code) {
   return { rate, discounted: Math.round(discounted * 100) / 100 };
 }
 
-// fetchTax(amount, region): cross-tier call to the Python tax service. Throws if it answers non-2xx.
-async function fetchTax(amount, region) {
-  const res = await fetch(`${TAX_SVC}/tax?amount=${amount}&region=${region}`);
-  if (!res.ok) throw new Error(`tax service ${res.status}`);
-  const body = await res.json();
-  return body.tax;
+// taxFor(amount, region): local tax table. Throws on an unknown region (→ 502 cascade in /checkout).
+const RATES = { US: 0.07, EU: 0.20, CA: 0.12 };
+function taxFor(amount, region) {
+  const rate = RATES[region];                  // unknown region → undefined → throws below
+  if (rate === undefined) throw new Error(`unknown region: ${region}`);
+  return Math.round(amount * rate * 100) / 100;
 }
 
-async function checkout(cart, coupon, region) {
+function checkout(cart, coupon, region) {
   const items = lineItems(cart);
   let subtotal = 0;
   for (const it of items) {
     subtotal += it.lineTotal;          // own line → breakpoint here hits once per item (mutation lineage)
   }
   const { rate, discounted } = applyCoupon(subtotal, coupon);
-  const tax = await fetchTax(discounted, region);
+  const tax = taxFor(discounted, region);
   const total = Math.round((discounted + tax) * 100) / 100;
   return { items, subtotal, rate, discounted, tax, total };
 }
 
-const server = createServer(async (req, res) => {
+const server = createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
   const json = (code, obj) => { res.statusCode = code; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(obj)); };
 
@@ -92,8 +91,8 @@ const server = createServer(async (req, res) => {
     const cart = (url.searchParams.get("cart") || "widget:2,gadget:1").split(",");
     const coupon = url.searchParams.get("coupon") || "";
     const region = url.searchParams.get("region") || "US";
-    try { return json(200, await checkout(cart, coupon, region)); }
-    catch (e) { return json(502, { error: e.message }); }   // cascades a tax-service failure
+    try { return json(200, checkout(cart, coupon, region)); }
+    catch (e) { return json(502, { error: e.message }); }   // cascades an unknown-region failure
   }
   json(404, { error: "not found" });
 });

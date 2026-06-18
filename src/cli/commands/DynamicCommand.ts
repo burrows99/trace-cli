@@ -12,7 +12,7 @@ import { Recording } from "../../domain/Recording.js";
 import type { ArtifactStore } from "../../storage/ArtifactStore.js";
 import { VERSION } from "../../shared/version.js";
 
-export type DynamicTargetKind = "node" | "chrome" | "python";
+export type DynamicTargetKind = "node" | "chrome";
 
 export interface DynamicRequest extends TraceOptions {
   target: DynamicTargetKind;
@@ -40,7 +40,6 @@ export class DynamicCommand {
 
     const capture =
       req.target === "chrome" ? await this.tracer.traceChrome(opts)
-      : req.target === "python" ? await this.tracer.tracePython(opts)
       : await this.tracer.traceNode(opts);
 
     const trace = this.#toTrace(capture, { sessionId, args: req.args ?? {}, startedAtMs });
@@ -52,7 +51,7 @@ export class DynamicCommand {
   }
 
   #toTrace(c: CaptureResult, ctx: { sessionId: string; args: Record<string, unknown>; startedAtMs: number }): Trace {
-    const source = c.target === "python" ? "dap" : "cdp";
+    const source = "cdp";
     const diagnostics: Diagnostic[] = [];
     if (c.fatal) diagnostics.push(Diagnostic.error("ENGINE_FATAL", String(c.fatal).split("\n")[0]));
     for (const b of c.breakpoints.filter((b) => !b.bound)) {

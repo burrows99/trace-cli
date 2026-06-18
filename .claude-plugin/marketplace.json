@@ -1,6 +1,6 @@
 {
   "name": "trace-oss",
-  "description": "Unified, language-agnostic execution tracer — the `trace` CLI + usage skill.",
+  "description": "Unified execution tracer (Node/Chrome) — the `trace` CLI + usage skill.",
   "owner": {
     "name": "Raunak Burrows"
   },
@@ -8,7 +8,7 @@
     {
       "name": "trace",
       "source": ".",
-      "description": "Set breakpoints + fire a trigger → a full execution trace as one JSON envelope. Node/Chrome over CDP, Python over DAP/debugpy; plus `trace serve` for a realtime trace UI. Adds the `trace` binary to PATH."
+      "description": "Set breakpoints + fire a trigger → a full execution trace as one JSON envelope. Node/Chrome over CDP; plus `trace serve` for a realtime trace UI. Adds the `trace` binary to PATH."
     }
   ]
 }

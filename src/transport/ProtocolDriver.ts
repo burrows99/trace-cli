@@ -1,8 +1,8 @@
 /**
  * ProtocolDriver — the transport abstraction the engine depends on (Dependency Inversion). The engine's
- * trigger+capture loop talks to this interface, never to chrome-remote-interface or @vscode DebugClient
- * directly; swapping CDP for DAP (or adding a new debug protocol) is a new implementation, not an engine
- * change. Interface Segregation: just the few operations the capture loop needs.
+ * trigger+capture loop talks to this interface, never to chrome-remote-interface directly; adding a new
+ * debug protocol is a new implementation, not an engine change. Interface Segregation: just the few
+ * operations the capture loop needs.
  */
 export interface ProtocolDriver {
   /** Send a protocol request; resolves the result/response body. */

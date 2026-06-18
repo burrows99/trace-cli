@@ -1,7 +1,7 @@
 {
   "name": "trace-cli",
   "version": "0.3.0",
-  "description": "Unified, language-agnostic execution tracer & analyzer. One JSON envelope across breakpoint traces (Node/Chrome via CDP, Python via DAP/debugpy) and static analysis. A thin orchestration shell over battle-tested debug protocols. Usable by any agent, human, or script.",
+  "description": "Unified execution tracer & analyzer. One JSON envelope across breakpoint traces (Node/Chrome via CDP) and static analysis. A thin orchestration shell over battle-tested debug protocols. Usable by any agent, human, or script.",
   "type": "module",
   "bin": {
     "trace": "bin/trace"
@@ -36,8 +36,6 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1071.0",
     "@aws-sdk/s3-request-presigner": "^3.1071.0",
-    "@vscode/debugadapter-testsupport": "^1.68.0",
-    "@vscode/debugprotocol": "^1.68.0",
     "chrome-remote-interface": "^0.34.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",

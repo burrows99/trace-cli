@@ -3,8 +3,8 @@
  * language target is a new subclass, not a change to existing code. Each knows its protocol (`source`) and
  * its trigger, and serializes to a TargetRef for the envelope (Liskov: all subclasses are substitutable).
  */
-export type TargetKind = "node" | "chrome" | "python";
-export type ProtocolKind = "cdp" | "dap";
+export type TargetKind = "node" | "chrome";
+export type ProtocolKind = "cdp";
 
 export interface TargetRef {
   kind: TargetKind;
@@ -43,15 +43,4 @@ export class ChromeTarget extends Target {
     readonly wsUrl?: string,
   ) { super(); }
   override get trigger(): string | null { return this.url ?? null; }
-}
-
-export class PythonTarget extends Target {
-  override readonly kind = "python" as const;
-  override readonly source = "dap" as const;
-  constructor(
-    override readonly port = 5678,
-    readonly host = "127.0.0.1",
-    readonly curl?: string,
-  ) { super(); }
-  override get trigger(): string | null { return this.curl ?? null; }
 }

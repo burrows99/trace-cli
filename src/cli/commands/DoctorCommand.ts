@@ -12,8 +12,6 @@ export interface ToolStatus { name: string; pillar: string; purpose: string; pre
 
 const TOOLS: ToolDef[] = [
   { name: "node", pillar: "engine", purpose: "Node --inspect (CDP) target", cmd: "node", args: ["--version"] },
-  { name: "python3", pillar: "engine", purpose: "Python (DAP) target", cmd: "python3", args: ["--version"] },
-  { name: "debugpy", pillar: "engine", purpose: "Python DAP adapter", cmd: "python3", args: ["-c", "import debugpy,sys;sys.stdout.write(debugpy.__version__)"] },
   { name: "chrome", pillar: "frontend", purpose: "Chrome target / recording frames", chrome: true },
   { name: "ffmpeg", pillar: "frontend", purpose: "dynamic --record video", cmd: "ffmpeg", args: ["-version"] },
   { name: "rg", pillar: "static", purpose: "static search (ripgrep)", cmd: "rg", args: ["--version"] },

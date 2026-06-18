@@ -38,11 +38,11 @@ test("Trace.ok defaults to false when an error diagnostic is present", () => {
 
 test("Trace.fromPlain rehydrates the full object graph to class instances", () => {
   const t = new Trace({
-    version: "0.3.0", command: "dynamic.python",
+    version: "0.3.0", command: "dynamic.node",
     meta: new TraceMeta({ at: new Date().toISOString(), sessionId: "s2" }),
     data: new TraceData({
-      events: [new TraceEvent({ seq: 1, kind: "breakpoint", loc: Loc.parse("app.py:30"), attrs: { locals: { x: 1 } } })],
-      breakpoints: [new Breakpoint({ file: "app.py", line: 30, bound: true })],
+      events: [new TraceEvent({ seq: 1, kind: "breakpoint", loc: Loc.parse("app.js:30"), attrs: { locals: { x: 1 } } })],
+      breakpoints: [new Breakpoint({ file: "app.js", line: 30, bound: true })],
     }),
     diagnostics: [Diagnostic.warn("BP_UNBOUND", "y")],
   });

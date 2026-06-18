@@ -11,7 +11,7 @@
     "version": { "type": "string" },
     "command": {
       "type": "string",
-      "description": "dotted command id, e.g. dynamic.python, static.complexity, exec, web, correlate"
+      "description": "dotted command id, e.g. dynamic.node, static.complexity, exec, web, correlate"
     },
     "ok": { "type": "boolean" },
     "meta": {
@@ -117,7 +117,7 @@
         "t": { "type": ["number", "string"], "description": "elapsed ms or ISO timestamp" },
         "kind": { "type": "string" },
         "label": { "type": "string" },
-        "source": { "enum": ["cdp", "dap", "terminal", "otel"], "description": "the collector that produced this event" },
+        "source": { "enum": ["cdp", "terminal", "otel"], "description": "the collector that produced this event" },
         "sessionId": { "type": "string", "description": "groups events of one run; shared across collectors for correlation" },
         "loc": { "$ref": "#/$defs/Loc" },
         "attrs": { "type": "object" },
