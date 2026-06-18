@@ -13,7 +13,7 @@ import { Breakpoint } from "../domain/Breakpoint.js";
 import { TargetKind } from "../domain/Target.js";
 import type { ConsoleLine, NetworkLine } from "../domain/Trace.js";
 import { sleep } from "../shared/sleep.js";
-import { DEFAULT_NODE_PORT, DEFAULT_CHROME_PORT, DEFAULT_ATTACH_TIMEOUT_MS } from "../shared/defaults.js";
+import { DEFAULT_NODE_PORT, DEFAULT_CHROME_PORT, DEFAULT_ATTACH_TIMEOUT_MS, DEFAULT_POST_LOAD_IDLE_MS } from "../shared/defaults.js";
 
 export interface CaptureResult {
   target: TargetKind;
@@ -240,7 +240,7 @@ export class Tracer {
       instrumentation: true,
       loaded: () => loaded,
       fire: (driver, ctx) => { ctx.t0 = performance.now(); log(`navigating ${url} (trigger)`); driver.send(Cdp.Page.navigate, { url }).catch(() => {}); },
-      timeout: () => (loaded ? 1500 : timeoutMs),
+      timeout: () => (loaded ? DEFAULT_POST_LOAD_IDLE_MS : timeoutMs),
       stepTimeoutMs: timeoutMs,
       stopOnInterrupt: false,
       shouldStop: () => false,
