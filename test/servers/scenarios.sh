@@ -4,7 +4,7 @@
 #
 # Setup (in separate terminals, or background them):
 #   docker compose up                                          # collector UI :4747 + mock-aws S3 :9000
-#   PORT=3101 DEBUG_PORT=5679 python3 test/servers/python-api/server.py        # tax service
+#   PORT=3101 DEBUG_PORT=5679 python3 -Xfrozen_modules=off test/servers/python-api/server.py   # tax service (-X flag: else debugpy misses breakpoints on py3.11+)
 #   PORT=3100 TAX_SVC=http://127.0.0.1:3101 node --inspect=9230 test/servers/node-api/server.js   # order API
 #   ( cd test/servers/react-app && npm install && npm run dev )                # checkout UI :5180
 #   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \

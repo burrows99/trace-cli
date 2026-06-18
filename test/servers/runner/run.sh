@@ -13,8 +13,10 @@ PORT=3100 TAX_SVC=http://127.0.0.1:3101 \
   node --inspect=9230 test/servers/node-api/server.js &
 
 # 2) Python tax service (:3101), debugpy on :5679. debugpy.listen() doesn't block, so it's traceable at once.
-PORT=3101 DEBUG_PORT=5679 \
-  python3 test/servers/python-api/server.py &
+#    -Xfrozen_modules=off is REQUIRED: on Python 3.11+ the frozen stdlib makes debugpy miss breakpoints, so
+#    the tracer would hang with 0 hits. (PYDEVD_DISABLE_FILE_VALIDATION=1 just silences the paired warning.)
+PYDEVD_DISABLE_FILE_VALIDATION=1 PORT=3101 DEBUG_PORT=5679 \
+  python3 -Xfrozen_modules=off test/servers/python-api/server.py &
 
 # 3) React/Vite checkout UI (:5180). The app source is bind-mounted read-only and vite writes a cache, so
 #    serve from a writable copy. Same files → same source maps, so scenario #5's `--root test/servers/
@@ -40,7 +42,10 @@ wait_http "http://127.0.0.1:3101/tax?amount=10&region=US" "python-api"   || exit
 wait_http "http://127.0.0.1:5180/"                        "react-app"    || exit 1
 wait_http "http://127.0.0.1:9334/json/version"            "chrome"       || exit 1
 wait_tcp  9230 "node --inspect"                                          || exit 1
-wait_tcp  5679 "debugpy"                                                 || exit 1
+# Do NOT wait_tcp 5679 (debugpy): a raw TCP probe is consumed by debugpy.listen() as its single client
+# connection, so the real tracer then hangs forever at the DAP `initialized` handshake. The python-api HTTP
+# check above already proves debugpy is up — server.py calls debugpy.listen() BEFORE serve_forever(), so a
+# 200 on :3101 ⇒ :5679 is already listening. (node --inspect/CDP tolerates the probe; debugpy does not.)
 wait_http "$C/api/sessions"                               "collector"    || exit 1
 
 echo "[demo] all targets ready — running scenarios → $C"

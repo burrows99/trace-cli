@@ -1,7 +1,8 @@
 """Python tax service for the end-to-end demo. The Node order-API calls /tax. Two planted faults:
   - compute_tax COMPOUNDS tax across phases (a runaway accumulator) instead of taxing once.
   - an unknown region raises KeyError → 500, which the Node side surfaces as a cascading 502.
-Run it (it serves :3101, debugpy on :5678):  python3 test/servers/python-api/server.py
+Run it (it serves :3101, debugpy on :5678):  python3 -Xfrozen_modules=off test/servers/python-api/server.py
+(The -X flag is needed on Python 3.11+ — frozen stdlib modules otherwise make debugpy miss breakpoints.)
 """
 import json
 import os
