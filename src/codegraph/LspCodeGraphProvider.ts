@@ -17,9 +17,9 @@ import {
 import type { CallGraphOptions, CodeGraph, CodeGraphProvider, EntryRef, GraphEdge, GraphNode, NodeScope, ProviderAvailability } from "./CodeGraphProvider.js";
 import { LspClient, resolveServer, defaultTsServer } from "./LspClient.js";
 import { logger } from "../shared/logger.js";
+import { sleep } from "../shared/sleep.js";
 
 const log = logger.child({ component: "codegraph", provider: "lsp" });
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * LspCodeGraphProvider — the official, language-agnostic provider. It drives a standard language server over

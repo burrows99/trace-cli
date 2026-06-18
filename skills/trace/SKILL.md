@@ -1,6 +1,6 @@
 ---
 name: trace
-description: Get a full execution trace through a running app via the `trace-cli` CLI — set breakpoints at file:line, fire a trigger (a curl command for a Node `--inspect` backend, or a page navigation for a Chrome `--remote-debugging-port` target), and read back every hit with its call stack, locals, watched expressions and timing as one JSON envelope. Node/Chrome over CDP. Also `trace-cli serve` for a realtime web UI of all traces. Use for "trace this request/route", "what runs when I hit /endpoint", "step through this function", "why is this value X here", "set a breakpoint and show the trace". Vendor-neutral: pass the port, the trigger, and the breakpoints — nothing is hardcoded.
+description: Get a full execution trace through a running app via the `trace-cli` CLI — set breakpoints at file:line, fire a trigger (a curl for a Node `--inspect` backend, or a page navigation for a Chrome `--remote-debugging-port` target — attach to a running Chrome or let it auto-launch headless), and read back every hit with its call stack, locals, watched expressions and timing as one JSON envelope. Node/Chrome over CDP. Also `trace-cli graph` builds a static call graph / flow tree for a function or route via the Language Server Protocol (call hierarchy) — no running app needed, language-agnostic (TS/JS bundled, other languages via `--server`); and `trace-cli serve` for a realtime web UI of all traces. Use for "trace this request/route", "what runs when I hit /endpoint", "show the call graph / flow tree for this function", "what calls what / what does this call", "step through this function", "why is this value X here", "set a breakpoint and show the trace". Vendor-neutral: pass the port, the trigger, and the breakpoints — nothing is hardcoded.
 allowed-tools: Bash(node:*), Bash(trace-cli:*), Read
 ---
 
@@ -9,6 +9,10 @@ allowed-tools: Bash(node:*), Bash(trace-cli:*), Read
 `trace-cli` attaches to an already-running debug target, sets breakpoints, fires a trigger, and prints the
 full execution trace in one shot. One engine, one protocol driver — **CDP** for Node and Chrome. You read
 the trace; you never drive the debugger by hand.
+
+Two things beyond attaching:
+- **Chrome can auto-launch.** `--chrome <port>` attaches to a browser you started (a real, logged-in session); `--chrome` with **no** port launches a throwaway headless Chrome, traces, records, and tears it down — so a frontend trace needs only the app running, not a hand-started browser.
+- **`trace-cli graph` needs no running app.** It builds a static call graph — the flow tree for a function or route — by driving a language server over **LSP call hierarchy**. Use it to map what a route/function calls (and to find good breakpoint coordinates before a dynamic trace). TS/JS work out of the box; other languages via `--server <cmd>` (`gopls`, `pyright --stdio`, `rust-analyzer`, `clangd`) — the server must be installed and expose `callHierarchyProvider`.
 
 ## Invoking (do this first)
 The CLI ships as a bundled binary — Claude substitutes `${CLAUDE_PLUGIN_ROOT}`. Define a shell **function**

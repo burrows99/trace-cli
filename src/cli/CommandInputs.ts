@@ -4,22 +4,18 @@
  * array shapes) using the same class-validator regime as the domain envelope. The CLI builds one of these
  * from the parsed flags and rejects the invocation (exit 2) before any tracer/engine work begins.
  */
-import { ArrayNotEmpty, IsArray, IsIn, IsInt, IsOptional, IsString, Max, Min, validateSync, ValidateIf } from "class-validator";
+import { ArrayNotEmpty, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateIf } from "class-validator";
 import { TargetKind } from "../domain/Target.js";
+import { validateStrict } from "../shared/validation.js";
 
 const MAX_PORT = 65535;
-
-/** Strict validation (whitelist + forbid-non-whitelisted); returns [] when valid, else "field: message" lines. */
-function problems(obj: object): string[] {
-  return validateSync(obj, { whitelist: true, forbidNonWhitelisted: true }).flatMap((e) =>
-    Object.values(e.constraints ?? {}).map((m) => `${e.property}: ${m}`),
-  );
-}
 
 /** Input contract for `trace-cli dynamic`. */
 export class DynamicInput {
   @IsIn(Object.values(TargetKind)) target: TargetKind;
-  @IsInt() @Min(1) @Max(MAX_PORT) port: number;
+  // In Chrome launch mode the port isn't known until the browser is spawned, so only range-check a real port.
+  @ValidateIf((o) => !o.launch) @IsInt() @Min(1) @Max(MAX_PORT) port: number;
+  @IsOptional() @IsBoolean() launch?: boolean;
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) breakpoints: string[];
   @IsArray() @IsString({ each: true }) exprs: string[];
   @IsOptional() @IsString() curl?: string;
@@ -33,7 +29,7 @@ export class DynamicInput {
     Object.assign(this, init);
   }
 
-  validate(): string[] { return problems(this); }
+  validate(): string[] { return validateStrict(this); }
 }
 
 /** Input contract for `trace-cli graph`. Requires a file plus an anchor: a line (optional col) or a symbol. */
@@ -50,7 +46,7 @@ export class GraphInput {
     Object.assign(this, init);
   }
 
-  validate(): string[] { return problems(this); }
+  validate(): string[] { return validateStrict(this); }
 }
 
 /** Input contract for `trace-cli journey`. `steps` are already-parsed Step objects (non-empty). */
@@ -65,5 +61,5 @@ export class JourneyInput {
     Object.assign(this, init);
   }
 
-  validate(): string[] { return problems(this); }
+  validate(): string[] { return validateStrict(this); }
 }

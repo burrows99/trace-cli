@@ -10,6 +10,7 @@ one signal source. See [`docs/MIGRATION.md`](docs/MIGRATION.md) for the architec
 
 ```
 trace-cli dynamic   ← breakpoints + a trigger → a full trace   (Node·Chrome via CDP)
+trace-cli graph     ← static call graph (the flow tree) for a function/route via LSP call hierarchy
 trace-cli journey   ← scripted UI journey across tabs → one motion screencast (Chrome via CDP)
 trace-cli serve     ← collector + realtime UI: show ALL traces live (Langfuse-style)
 trace-cli doctor    ← which backing tools are installed
@@ -32,8 +33,11 @@ trace-cli dynamic --node 9229 \
   --bp src/dashboard/dashboard.service.ts:149 \
   --expr 'user.id'
 
-# Chrome (CDP): attach to --remote-debugging-port, navigate (breakpoints bind before the first run), trace the render
+# Chrome (CDP): attach to a running --remote-debugging-port, navigate (breakpoints bind before the first run), trace
 trace-cli dynamic --chrome 9222 --url http://localhost:3000/route --bp src/pages/Thing.tsx:42
+
+# …or omit the port — the CLI launches a throwaway headless Chrome itself, traces, records, and tears it down
+trace-cli dynamic --chrome --url http://localhost:5173/route --bp src/pages/Thing.tsx:42
 ```
 
 The engine is built around one `ProtocolDriver` interface, so additional debug protocols (DAP for Python, Go,
@@ -41,7 +45,9 @@ Java, C/C++/Rust) are a new driver behind the same envelope — see the [roadmap
 
 Flags (both targets): `--bp <file:line | file@substring>` (repeatable) · `--expr '<js>'` (repeatable, evaluated
 at every hit) · `--json [path]` (envelope to a file, or bare `--json` for JSON on stdout). The trigger is
-target-specific: Node takes `--curl`, Chrome takes `--url`. Everything else (hit cap, stack depth, source
+target-specific: Node takes `--curl`, Chrome takes `--url`. `--chrome <port>` attaches to a browser you
+launched (a real, logged-in session); bare `--chrome` launches a throwaway headless Chrome for you.
+Everything else (hit cap, stack depth, source
 root, attach timeout) uses sane defaults — kept off the flag surface on purpose. Chrome **always records a
 debug-replay video** — a motion screencast of the page with the live trace panel (stack/locals/watch) beside
 each moment — uploaded to S3 if `S3_ENDPOINT` is set, with the link attached to the trace
@@ -89,6 +95,45 @@ Next dev server for the UI:
 trace-cli serve --port 4000        # collector + API (data source)
 npm run dev:ui                 # Next.js dev → http://localhost:3000 (reads :4000 via ui/.env.development)
 ```
+
+## Code graph — the flow tree (`trace-cli graph`)
+
+Static call graph **without running anything**: point it at a function or route and it returns the outgoing-call
+tree — the deterministic "what calls what" for that entry. It drives a **language server over the Language
+Server Protocol** (`prepareCallHierarchy` + `callHierarchy/outgoingCalls`) — the exact engine an IDE's *Show
+Call Hierarchy* uses — so resolution is type-accurate (it follows DI-injected services, interface→impl, and
+cross-file imports), not a regex guess.
+
+```bash
+# the common case — just the entry; root + language server are auto-detected
+trace-cli graph --entry src/auth/auth.service.ts:42:9
+trace-cli graph --entry src/auth/auth.service.ts@exchangeToken     # …or by symbol
+```
+
+The only required input is the entry (`file:line`, `file:line:col`, or `file@symbol`). The project **root** is
+found by walking up to the nearest `tsconfig.json`/`package.json`/`.git`, and the **LSP server** is chosen by
+file extension — so a TS/JS graph needs no extra flags (`typescript-language-server` ships with the tool).
+`--depth <n>` bounds it; `--server <cmd>` and `--root <dir>` override the auto-detection.
+
+The payload is a normalized `{ nodes, edges }` graph (the schema's `Graph` shape) under `data.graph`; the human
+render unrolls it into a flow tree, marking shared callees (`→ shared`), recursion (`↻ cycle`), and the
+boundary to external/dependency code (`⊗ external`) — which is exactly where a *dynamic* trace takes over.
+
+**Any language with a call-hierarchy LSP server**, not just TS — point `--server` at it:
+
+| Language | `--server` | Notes |
+| --- | --- | --- |
+| TS / JS / React | *(bundled `typescript-language-server`)* | default; `.tsx`/`.jsx` included |
+| Python | `pyright` / `basedpyright` | install the server |
+| Go | `gopls` | install the server |
+| Rust | `rust-analyzer` | install the server |
+| C / C++ | `clangd` | needs `compile_commands.json` |
+| Java | `jdtls` | install + a custom launch command |
+
+Caveats, all about the server/project (not the tool): the server must be **installed** and advertise
+`callHierarchyProvider` (the CLI checks and errors clearly if not); the project must be **resolvable** by that
+server (e.g. clangd needs `compile_commands.json`); and it's a *call* graph — JSX `<Component/>` composition
+isn't a call, and calls nested in callbacks attribute to the callback, not the enclosing function.
 
 ## The contract: one envelope
 
@@ -172,11 +217,9 @@ PORT=3100 node --inspect=9230 test/servers/node-api/server.js &
 trace-cli dynamic --node 9230 --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1&coupon=SAVE10&region=US"' \
   --bp "test/servers/node-api/server.js@subtotal += it.lineTotal" --expr subtotal --expr 'it.sku'
 
-# React (Chrome / CDP) — traced on the frontend through Vite source maps
+# React (Chrome / CDP) — frontend through Vite source maps; bare --chrome → the CLI launches headless Chrome itself
 cd test/servers/react-app && npm install && npm run dev &     # serves :5180
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --headless=new --remote-debugging-port=9334 --user-data-dir=/tmp/chrome about:blank &
-trace-cli dynamic --chrome 9334 --url http://localhost:5180 \
+trace-cli dynamic --chrome --url http://localhost:5180 \
   --bp "test/servers/react-app/src/price.ts@sum = sum + parseInt" --expr sum
 ```
 
@@ -185,10 +228,12 @@ them land live in the `trace-cli serve` UI.
 
 ## Roadmap
 
-Built today: the **backend pillar** (Node · Chrome over CDP) + the **collector/UI** + Docker. Next, behind the
-same envelope: **DAP languages** (Python, Go, Java, C/C++) via a second `ProtocolDriver`, the **static** pillar
-(`trace-cli static search|complexity|symbols|deps`), `trace-cli exec` (OTel spans), `trace-cli web` (Playwright), and
-`trace-cli correlate` (the cross-tier `traceparent` handshake). See [`docs/MIGRATION.md`](docs/MIGRATION.md).
+Built today: the **backend pillar** (Node · Chrome over CDP, attach *or* auto-launch) + the **static pillar**
+(`trace-cli graph` — call graph / flow tree via LSP call hierarchy, any language with a call-hierarchy server) +
+the **collector/UI** + Docker. Next, behind the same envelope: **DAP languages** (Python, Go, Java, C/C++) for
+*dynamic* tracing via a second `ProtocolDriver`, more static analyzers (`complexity|symbols|deps`), `trace-cli
+exec` (OTel spans), `trace-cli web` (Playwright), and `trace-cli correlate` (the cross-tier `traceparent`
+handshake). See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ## License
 

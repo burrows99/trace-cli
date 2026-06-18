@@ -11,6 +11,7 @@
  * back-edges are marked rather than re-expanded. The node/edge shapes mirror the `Graph`/`Loc` $defs already
  * declared in the output schema so consumers learn one vocabulary.
  */
+import { Loc } from "../domain/Loc.js";
 
 /** Where to start: a file plus a 1-based line (optionally a 1-based col), or a symbol name. */
 export interface EntryRef {
@@ -18,6 +19,17 @@ export interface EntryRef {
   line?: number;
   col?: number;
   symbol?: string;
+}
+
+export namespace EntryRef {
+  /** Parse a CLI `--entry`: `file@symbol` → {file, symbol}; `file:line[:col]` → {file, line, col?}; else {file}. */
+  export function parse(ref: string): EntryRef {
+    const at = ref.indexOf("@");
+    if (at >= 0) return { file: ref.slice(0, at), symbol: ref.slice(at + 1) };
+    const loc = Loc.parse(ref);
+    if (loc?.line) return { file: loc.file, line: loc.line, ...(loc.col != null ? { col: loc.col } : {}) };
+    return { file: ref };
+  }
 }
 
 /** Knobs for one call-graph build. `root` scopes the project; depth/node caps keep the graph bounded + fast. */

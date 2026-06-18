@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { Tracer, type CaptureResult, type TraceOptions } from "../../engine/Tracer.js";
 import { Recorder } from "../../engine/Recorder.js";
+import { ChromeLauncher, type LaunchedChrome } from "../../engine/ChromeLauncher.js";
 import { Renderer } from "../../engine/Renderer.js";
 import { LineageAnalyzer } from "../../analysis/LineageAnalyzer.js";
 import { Trace, TraceData, CurlResponse } from "../../domain/Trace.js";
@@ -20,6 +21,7 @@ export type DynamicTargetKind = TargetKind;
 
 export interface DynamicRequest extends TraceOptions {
   target: DynamicTargetKind;
+  launch?: boolean;            // chrome: spawn a throwaway headless Chrome instead of attaching to `port`
   record?: boolean;            // chrome: render + upload a debug-replay video (on by default)
   recordOut?: string;          // explicit output path (else a temp file)
 }
@@ -42,18 +44,30 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
   async run(req: DynamicRequest): Promise<DynamicResult> {
     const startedAtMs = this.started();
     const sessionId = req.sessionId ?? randomUUID();
-    const opts: TraceOptions = { ...req, sessionId, record: req.record };
 
-    const capture =
-      req.target === TargetKind.Chrome ? await this.tracer.traceChrome(opts)
-      : await this.tracer.traceNode(opts);
+    // Chrome launch mode (`--chrome` with no port): spawn a throwaway headless Chrome to BE the trace target,
+    // then tear it down. Attach mode (`--chrome <port>`) skips this and uses the running browser as-is.
+    let launched: LaunchedChrome | undefined;
+    try {
+      let opts: TraceOptions = { ...req, sessionId, record: req.record };
+      if (req.target === TargetKind.Chrome && req.launch) {
+        launched = await ChromeLauncher.launch();
+        opts = { ...opts, port: launched.port };
+      }
 
-    const trace = this.#toTrace(capture, { sessionId, args: req.args ?? {}, startedAtMs });
+      const capture =
+        req.target === TargetKind.Chrome ? await this.tracer.traceChrome(opts)
+        : await this.tracer.traceNode(opts);
 
-    if (req.target === TargetKind.Chrome && req.record !== false) {
-      await this.#record(capture, trace, sessionId, req.recordOut);
+      const trace = this.#toTrace(capture, { sessionId, args: req.args ?? {}, startedAtMs });
+
+      if (req.target === TargetKind.Chrome && req.record !== false) {
+        await this.#record(capture, trace, sessionId, req.recordOut);
+      }
+      return { trace, capture };
+    } finally {
+      launched?.kill();
     }
-    return { trace, capture };
   }
 
   #toTrace(c: CaptureResult, ctx: { sessionId: string; args: Record<string, unknown>; startedAtMs: number }): Trace {

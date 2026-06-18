@@ -1,7 +1,8 @@
 import "reflect-metadata";
 import { instanceToPlain, plainToInstance, Type } from "class-transformer";
-import { Equals, IsArray, IsBoolean, IsObject, IsOptional, IsString, ValidateNested, validateSync, type ValidationError } from "class-validator";
+import { Equals, IsArray, IsBoolean, IsObject, IsOptional, IsString, ValidateNested } from "class-validator";
 
+import { validateStrict } from "../shared/validation.js";
 import { Breakpoint } from "./Breakpoint.js";
 import { TraceEvent } from "./TraceEvent.js";
 import { Lineage } from "./Lineage.js";
@@ -88,18 +89,12 @@ export class Trace {
   }
 
   /**
-   * Structural validation via class-validator. Returns [] when valid. Strict: `whitelist` +
-   * `forbidNonWhitelisted` reject any property the domain doesn't declare; the recursion walks `children`
-   * so failures inside nested entities (events[], lineage[].series[], data.recording, …) surface with a path.
+   * Structural validation via class-validator (strict; see {@link validateStrict}). Returns [] when valid;
+   * the recursion surfaces failures inside nested entities (events[], lineage[].series[], data.recording, …)
+   * with a dotted path.
    */
   validate(): string[] {
-    const flatten = (errs: ValidationError[], path = ""): string[] =>
-      errs.flatMap((e) => {
-        const at = path ? `${path}.${e.property}` : e.property;
-        const here = Object.values(e.constraints ?? {}).map((m) => `${at}: ${m}`);
-        return e.children?.length ? here.concat(flatten(e.children, at)) : here;
-      });
-    return flatten(validateSync(this, { whitelist: true, forbidNonWhitelisted: true }));
+    return validateStrict(this);
   }
 
   /** Hydrate a stored/received plain envelope back into a rich Trace (used by the collector). */

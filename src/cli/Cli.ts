@@ -17,8 +17,7 @@ import { TargetKind } from "../domain/Target.js";
 import { Diagnostic } from "../domain/Diagnostic.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
 import { DynamicInput, JourneyInput, GraphInput } from "./CommandInputs.js";
-import { Loc } from "../domain/Loc.js";
-import type { EntryRef } from "../codegraph/CodeGraphProvider.js";
+import { EntryRef } from "../codegraph/CodeGraphProvider.js";
 import { logger } from "../shared/logger.js";
 import type { Trace } from "../domain/Trace.js";
 
@@ -27,18 +26,12 @@ const int = (v: string) => parseInt(v, 10);
 const collect = (v: string, acc: string[]) => { acc.push(v); return acc; };
 const usage = (msg: string): never => { process.stderr.write(`trace: ${msg}\n`); process.exit(2); };
 
-function pickTarget(o: any): { target: DynamicTargetKind; port: number } {
-  if (o.chrome != null) return { target: TargetKind.Chrome, port: o.chrome };
-  return { target: TargetKind.Node, port: o.node === undefined || o.node === true ? DEFAULT_NODE_PORT : int(o.node) };
-}
-
-/** Parse a graph `--entry`: `file@symbol` → {file, symbol}; `file:line[:col]` → {file, line, col?}; else {file}. */
-function parseEntry(ref: string): EntryRef {
-  const at = ref.indexOf("@");
-  if (at >= 0) return { file: ref.slice(0, at), symbol: ref.slice(at + 1) };
-  const loc = Loc.parse(ref);
-  if (loc?.line) return { file: loc.file, line: loc.line, ...(loc.col != null ? { col: loc.col } : {}) };
-  return { file: ref };
+function pickTarget(o: any): { target: DynamicTargetKind; port: number; launch: boolean } {
+  if (o.chrome != null) {
+    const launch = o.chrome === true; // bare `--chrome` (no port) → launch a throwaway headless Chrome
+    return { target: TargetKind.Chrome, port: launch ? 0 : int(o.chrome), launch };
+  }
+  return { target: TargetKind.Node, port: o.node === undefined || o.node === true ? DEFAULT_NODE_PORT : int(o.node), launch: false };
 }
 
 /** emit policy: bare --json → JSON to stdout; --json <path> → file (stdout stays human); else human. */
@@ -62,22 +55,22 @@ export class Cli {
   #dynamic = new DynamicCommand(new Tracer(), new S3ArtifactStore());
 
   async #runDynamic(o: any): Promise<void> {
-    const { target, port } = pickTarget(o);
+    const { target, port, launch } = pickTarget(o);
     const isChrome = target === TargetKind.Chrome;
     if (!o.bp.length) usage("dynamic needs at least one --bp (file:line or file@substring)");
     if (isChrome && !o.url) usage("chrome target needs --url");
     if (!isChrome && !o.curl) usage(`${target} target needs --curl`);
 
-    const input = new DynamicInput({ target, port, breakpoints: o.bp, exprs: o.expr, curl: o.curl, url: o.url });
+    const input = new DynamicInput({ target, port, launch, breakpoints: o.bp, exprs: o.expr, curl: o.curl, url: o.url });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
 
     const { trace } = await this.#dynamic.run({
-      target, port,
+      target, port, launch,
       breakpoints: o.bp, exprs: o.expr,
       curl: o.curl, url: o.url,
       record: isChrome, // Chrome always records the debug-replay video (uploads to S3 if S3_ENDPOINT is set)
-      args: { target, port, bp: o.bp, ...(o.curl ? { curl: o.curl } : {}), ...(o.url ? { url: o.url } : {}) },
+      args: { target, ...(launch ? { launch: true } : { port }), bp: o.bp, ...(o.curl ? { curl: o.curl } : {}), ...(o.url ? { url: o.url } : {}) },
     });
 
     emit(trace, () => this.#dynamic.render(trace), o);
@@ -104,7 +97,7 @@ export class Cli {
   }
 
   async #runGraph(o: any): Promise<void> {
-    const entry = parseEntry(o.entry);
+    const entry = EntryRef.parse(o.entry);
     const input = new GraphInput({ file: entry.file, line: entry.line, col: entry.col, symbol: entry.symbol, depth: o.depth });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
@@ -134,7 +127,7 @@ export class Cli {
     program.command("dynamic")
       .description("breakpoints + a trigger → a full execution trace (Node CDP · Chrome CDP)")
       .option("--node [port]", `Node --inspect target (default; port ${DEFAULT_NODE_PORT})`)
-      .option("--chrome <port>", "Chrome --remote-debugging-port target", int)
+      .option("--chrome [port]", "Chrome target: a running browser's --remote-debugging-port, or omit the port to launch a throwaway headless Chrome")
       .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring", collect, [])
       .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
       .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")

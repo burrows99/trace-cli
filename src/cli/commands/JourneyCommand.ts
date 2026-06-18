@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Type } from "class-transformer";
-import { IsArray, IsBoolean, IsInt, IsOptional, IsString, ValidateNested, validateSync, type ValidationError } from "class-validator";
+import { IsArray, IsBoolean, IsInt, IsOptional, IsString, ValidateNested } from "class-validator";
 
+import { validateStrict } from "../../shared/validation.js";
 import { JourneyRunner, StepResult, type Step } from "../../engine/JourneyRunner.js";
 import { Screencaster } from "../../engine/Screencaster.js";
 import { Recorder } from "../../engine/Recorder.js";
@@ -47,13 +48,7 @@ export class JourneyResult {
 
   /** Strict structural validation; returns [] when valid, else "field[.child]: message" lines. */
   validate(): string[] {
-    const flatten = (errs: ValidationError[], path = ""): string[] =>
-      errs.flatMap((e) => {
-        const at = path ? `${path}.${e.property}` : e.property;
-        const here = Object.values(e.constraints ?? {}).map((m) => `${at}: ${m}`);
-        return e.children?.length ? here.concat(flatten(e.children, at)) : here;
-      });
-    return flatten(validateSync(this, { whitelist: true, forbidNonWhitelisted: true }));
+    return validateStrict(this);
   }
 }
 
