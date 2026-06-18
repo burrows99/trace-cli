@@ -7,7 +7,7 @@ import { findProjectRoot } from "../../shared/projectRoot.js";
 import { createCodeGraphProvider } from "../../codegraph/createCodeGraphProvider.js";
 import type { CodeGraph, EntryRef } from "../../codegraph/CodeGraphProvider.js";
 import { TraceCommand } from "./TraceCommand.js";
-import { renderGraphHtml, renderGraphTree } from "./graphView.js";
+import { GraphView } from "./GraphView.js";
 
 const log = logger.child({ component: "graph" });
 const MAX_NODES = 2000; // internal safety cap on graph size; --depth is the user-facing size knob
@@ -73,11 +73,11 @@ export class GraphCommand extends TraceCommand<GraphRequest> {
   render(trace: Trace): string {
     const graph = trace.data.graph as CodeGraph | undefined;
     const guard = this.emptyRender(trace, !!graph?.nodes?.length, "graph", "no nodes");
-    return guard !== undefined ? guard : renderGraphTree(graph!);
+    return guard !== undefined ? guard : GraphView.tree(graph!);
   }
 
-  /** HTML view: the same call graph as an interactive node-and-edge diagram (see {@link renderGraphHtml}). */
+  /** HTML view: the same call graph as an interactive node-and-edge diagram (see {@link GraphView.callGraphHtml}). */
   renderHtml(trace: Trace): string {
-    return renderGraphHtml(trace);
+    return GraphView.callGraphHtml(trace);
   }
 }

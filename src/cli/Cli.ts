@@ -150,9 +150,19 @@ export class Cli {
       root: o.root,
       extensions: o.ext,
       tsConfig: o.tsconfig,
+      exclude: o.exclude,
       args: { entry: o.entry, ...(o.root ? { root: o.root } : {}) },
     });
-    await this.#finish(trace, () => cmd.render(trace), o);
+    emit(trace, () => cmd.render(trace), o);
+    // --html [path] → also write the whole module graph as the interactive diagram (same renderer as `graph`).
+    if (o.html != null) {
+      const htmlPath = typeof o.html === "string" ? o.html : join(tmpdir(), `trace-deps-${randomUUID()}.html`);
+      writeFileSync(htmlPath, cmd.renderHtml(trace));
+      log.info("deps HTML written", { path: htmlPath });
+    }
+    const collector = process.env.TRACE_COLLECTOR_URL;
+    if (collector) await Collector.emit(collector, trace.toJSON());
+    process.exit(trace.hasErrors() ? 1 : 0);
   }
 
   async #runComplexity(path: string, o: any): Promise<void> {
@@ -213,6 +223,8 @@ export class Cli {
       .option("--root <dir>", "working directory for madge (default: cwd)")
       .option("--ext <list>", "comma-separated file extensions to scan (default: ts,tsx,js,jsx,mjs,cjs)")
       .option("--tsconfig <path>", "tsconfig for path-alias resolution (default: auto-detected near root/entry)")
+      .option("--exclude <regexp>", "drop module paths matching this regexp (madge --exclude), e.g. \"(^|/)dist/\" to skip build output")
+      .option("--html [path]", "also write the whole module graph as an interactive node-and-edge diagram (to a file if a path is given, else a temp file)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((o) => this.#runDeps(o));
 

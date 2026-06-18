@@ -5,6 +5,7 @@ import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
 import type { ToolRun } from "../../shared/runTool.js";
 import { ShellAnalysisCommand, type AnalysisOutcome, type ToolInvocation } from "./ShellAnalysisCommand.js";
+import { GraphView } from "./GraphView.js";
 
 // madge defaults to scanning js/jsx only — on a TS/NestJS repo that finds zero modules. Cover the common
 // source extensions by default so `deps` works on TS, TSX and ESM/CJS projects without extra flags.
@@ -15,6 +16,7 @@ export interface DepsRequest {
   root?: string;          // cwd for madge (default: process.cwd())
   extensions?: string;    // comma-separated file extensions madge should scan (default: DEFAULT_EXTENSIONS)
   tsConfig?: string;      // tsconfig for path-alias resolution (default: auto-detected near root/entry)
+  exclude?: string;       // regexp of module paths to drop (madge --exclude), e.g. build output like "(^|/)dist/"
   args?: Record<string, unknown>;
 }
 
@@ -39,8 +41,13 @@ export class DepsCommand extends ShellAnalysisCommand<DepsRequest> {
     const extensions = req.extensions ?? DEFAULT_EXTENSIONS;
     // A tsconfig lets madge resolve path aliases (e.g. `@/foo`); auto-detect one so the common case needs no flag.
     const tsConfig = req.tsConfig ?? findTsConfig(cwd, req.entry);
-    const argv = ["--json", "--extensions", extensions, ...(tsConfig ? ["--ts-config", tsConfig] : []), req.entry];
-    return { argv, cwd, args: { ...(req.args ?? {}), extensions, ...(tsConfig ? { tsConfig } : {}) } };
+    const argv = [
+      "--json", "--extensions", extensions,
+      ...(tsConfig ? ["--ts-config", tsConfig] : []),
+      ...(req.exclude ? ["--exclude", req.exclude] : []),
+      req.entry,
+    ];
+    return { argv, cwd, args: { ...(req.args ?? {}), extensions, ...(tsConfig ? { tsConfig } : {}), ...(req.exclude ? { exclude: req.exclude } : {}) } };
   }
 
   protected interpret(res: ToolRun, req: DepsRequest): AnalysisOutcome {
@@ -80,6 +87,11 @@ export class DepsCommand extends ShellAnalysisCommand<DepsRequest> {
       outs.forEach((to, i) => lines.push(`  ${i === outs.length - 1 ? "└─" : "├─"} ${to}`));
     }
     return lines.join("\n");
+  }
+
+  /** HTML view: the whole module graph as an interactive node-and-edge diagram (see {@link GraphView.depsHtml}). */
+  renderHtml(trace: Trace): string {
+    return GraphView.depsHtml(trace);
   }
 }
 

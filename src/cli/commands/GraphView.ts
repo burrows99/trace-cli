@@ -1,159 +1,210 @@
 import type { Trace } from "../../domain/Trace.js";
 import type { CodeGraph, GraphEdge, GraphNode } from "../../codegraph/CodeGraphProvider.js";
+import type { DepGraph } from "./DepsCommand.js"; // type-only: no runtime cycle (DepsCommand imports the renderer)
 
-/**
- * graphView — the human + HTML presentation of a built call graph, split out of {@link GraphCommand} so the
- * command stays a thin use-case (build the graph, stamp the envelope) and the rendering (a text flow-tree and
- * a self-contained interactive SVG page, ~250 lines of CSS/JS strings) lives on its own. Pure functions of the
- * graph/trace — no IO, no command state.
- */
-
-const esc = (s: unknown): string =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-/**
- * Text view: the call graph unrolled into a flow tree, with shared callees, cycles and externals marked. A
- * traversal over the normalized graph — a node reached twice is marked `→ shared` and a back-edge `↻ cycle`
- * rather than re-expanded, so the tree terminates on recursion.
- */
-export function renderGraphTree(graph: CodeGraph): string {
-  const byId = new Map<string, GraphNode>(graph.nodes.map((n) => [n.id, n]));
-  const adj = new Map<string, GraphEdge[]>();
-  for (const e of graph.edges) (adj.get(e.from) ?? adj.set(e.from, []).get(e.from)!).push(e);
-
-  const root = byId.get(graph.entry);
-  const head = [
-    `graph — ${root?.label ?? graph.entry}  (${root?.loc.file}:${root?.loc.line})  via ${graph.provider}`,
-    `  ${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
-      (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
-      (graph.stats.truncated ? " · truncated" : ""),
-    "",
-  ];
-
-  const lines: string[] = [];
-  const onPath = new Set<string>();
-  const emitted = new Set<string>();
-
-  const label = (n: GraphNode, weight?: number): string => {
-    const w = weight && weight > 1 ? ` ×${weight}` : "";
-    if (n.scope !== "local") return `${n.label}  ⊗ ${n.scope}${w}`;
-    return `${n.label}  ${n.loc.file}:${n.loc.line}${w}`;
-  };
-
-  const walk = (id: string, prefix: string, connector: string, weight: number | undefined): void => {
-    const n = byId.get(id);
-    if (!n) return;
-    const cycle = onPath.has(id);
-    const kids = adj.get(id) ?? [];
-    const shared = emitted.has(id) && kids.length > 0;
-    const tag = cycle ? "  ↻ cycle" : shared ? "  → shared" : "";
-    lines.push(`${prefix}${connector}${label(n, weight)}${tag}`);
-    if (cycle || shared) return; // back-edge / already-expanded: reference only, don't recurse
-    emitted.add(id);
-    onPath.add(id);
-    const childPrefix = connector ? prefix + (connector.startsWith("└") ? "   " : "│  ") : prefix;
-    kids.forEach((e, i) => {
-      const last = i === kids.length - 1;
-      walk(e.to, childPrefix, last ? "└─ " : "├─ ", e.weight);
-    });
-    onPath.delete(id);
-  };
-
-  walk(graph.entry, "", "", undefined);
-  return head.concat(lines).join("\n");
+/** Header + stats + truncation note rendered above the graph. */
+interface ForceMeta { title: string; h1: string; sub: string; stats: string; truncated?: string }
+/** Node/edge payload handed to the inline force layout. `scope` drives node colour (local=blue, external=amber). */
+interface ForcePayload {
+  entry: string;
+  nodes: { id: string; label: string; kind: string; file: string; line: number; scope: string }[];
+  edges: { from: string; to: string; weight: number }[];
 }
 
 /**
- * HTML view: the call graph drawn as an actual node-and-edge diagram — a self-contained, zero-dependency
- * interactive page. Every `graph.nodes` entry is a circle, every `graph.edges` entry a directed arrow, laid
- * out by an inline force-directed simulation (SVG + vanilla JS). Pan (drag background), zoom (wheel), drag a
- * node to pin it, hover to spotlight a node's callers/callees, and filter by name/file. This is the whole
- * point of `--html`: see the codebase as a graph of calls, not a list of collapsible rows. The entry is
- * accented, externals are amber, hubs scale with degree, and recursion shows as a self-loop. Returns a
- * complete HTML document (no external assets) ready to write to a file.
+ * GraphView — the human + HTML presentation of a built call/module graph, split out of {@link GraphCommand} and
+ * {@link DepsCommand} so each command stays a thin use-case (build the graph, stamp the envelope) and the
+ * rendering (a text flow-tree and a self-contained interactive SVG page, ~250 lines of CSS/JS strings) lives on
+ * its own. A namespace of pure static renderers — no IO, no instance state — keyed off the graph/trace.
  */
-export function renderGraphHtml(trace: Trace): string {
-  const graph = trace.data.graph as CodeGraph | undefined;
-  if (!graph || !graph.nodes?.length) {
-    const err = trace.diagnostics.find((d) => d.level === "error");
-    const msg = err ? `graph failed: ${err.message}` : "graph — no nodes";
-    return htmlDoc("trace-cli graph", `<p class="empty">${esc(msg)}</p>`);
+export class GraphView {
+  /**
+   * Text view: the call graph unrolled into a flow tree, with shared callees, cycles and externals marked. A
+   * traversal over the normalized graph — a node reached twice is marked `→ shared` and a back-edge `↻ cycle`
+   * rather than re-expanded, so the tree terminates on recursion.
+   */
+  static tree(graph: CodeGraph): string {
+    const byId = new Map<string, GraphNode>(graph.nodes.map((n) => [n.id, n]));
+    const adj = new Map<string, GraphEdge[]>();
+    for (const e of graph.edges) (adj.get(e.from) ?? adj.set(e.from, []).get(e.from)!).push(e);
+
+    const root = byId.get(graph.entry);
+    const head = [
+      `graph — ${root?.label ?? graph.entry}  (${root?.loc.file}:${root?.loc.line})  via ${graph.provider}`,
+      `  ${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
+        (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
+        (graph.stats.truncated ? " · truncated" : ""),
+      "",
+    ];
+
+    const lines: string[] = [];
+    const onPath = new Set<string>();
+    const emitted = new Set<string>();
+
+    const label = (n: GraphNode, weight?: number): string => {
+      const w = weight && weight > 1 ? ` ×${weight}` : "";
+      if (n.scope !== "local") return `${n.label}  ⊗ ${n.scope}${w}`;
+      return `${n.label}  ${n.loc.file}:${n.loc.line}${w}`;
+    };
+
+    const walk = (id: string, prefix: string, connector: string, weight: number | undefined): void => {
+      const n = byId.get(id);
+      if (!n) return;
+      const cycle = onPath.has(id);
+      const kids = adj.get(id) ?? [];
+      const shared = emitted.has(id) && kids.length > 0;
+      const tag = cycle ? "  ↻ cycle" : shared ? "  → shared" : "";
+      lines.push(`${prefix}${connector}${label(n, weight)}${tag}`);
+      if (cycle || shared) return; // back-edge / already-expanded: reference only, don't recurse
+      emitted.add(id);
+      onPath.add(id);
+      const childPrefix = connector ? prefix + (connector.startsWith("└") ? "   " : "│  ") : prefix;
+      kids.forEach((e, i) => {
+        const last = i === kids.length - 1;
+        walk(e.to, childPrefix, last ? "└─ " : "├─ ", e.weight);
+      });
+      onPath.delete(id);
+    };
+
+    walk(graph.entry, "", "", undefined);
+    return head.concat(lines).join("\n");
   }
 
-  // The graph IS the data: no traversal/dedup here — nodes and edges go to the page verbatim and the
-  // force layout positions them. Cycles are just edges that close a loop; a recursive call is a self-edge.
-  const payload = {
-    entry: graph.entry,
-    nodes: graph.nodes.map((n) => ({ id: n.id, label: n.label, kind: n.kind, file: n.loc.file, line: n.loc.line, scope: n.scope })),
-    edges: graph.edges.map((e) => ({ from: e.from, to: e.to, weight: e.weight ?? 1 })),
-  };
-  // Inline JSON safely: neutralize "<" (so "</script>" can't terminate the block) and the JS line separators.
-  const dataJson = JSON.stringify(payload)
-    .replace(/</g, "\\u003c")
-    .replace(new RegExp(String.fromCharCode(0x2028), "g"), "\\u2028")
-    .replace(new RegExp(String.fromCharCode(0x2029), "g"), "\\u2029");
+  /**
+   * HTML view: the call graph drawn as an actual node-and-edge diagram — a self-contained, zero-dependency
+   * interactive page. Every `graph.nodes` entry is a circle, every `graph.edges` entry a directed arrow, laid
+   * out by an inline force-directed simulation (SVG + vanilla JS). Pan (drag background), zoom (wheel), drag a
+   * node to pin it, hover to spotlight a node's callers/callees, and filter by name/file. This is the whole
+   * point of `--html`: see the codebase as a graph of calls, not a list of collapsible rows. The entry is
+   * accented, externals are amber, hubs scale with degree, and recursion shows as a self-loop. Returns a
+   * complete HTML document (no external assets) ready to write to a file.
+   */
+  static callGraphHtml(trace: Trace): string {
+    const graph = trace.data.graph as CodeGraph | undefined;
+    if (!graph || !graph.nodes?.length) {
+      const err = trace.diagnostics.find((d) => d.level === "error");
+      const msg = err ? `graph failed: ${err.message}` : "graph — no nodes";
+      return GraphView.htmlDoc("trace-cli graph", `<p class="empty">${GraphView.esc(msg)}</p>`);
+    }
 
-  const root = graph.nodes.find((n) => n.id === graph.entry);
-  const stats =
-    `${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
-    (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
-    (graph.stats.truncated ? " · truncated" : "");
-  const truncated = graph.stats.truncated
-    ? `<div class="warn">graph truncated — raise --depth for more, or pick a more specific entry</div>`
-    : "";
+    // The graph IS the data: no traversal/dedup here — nodes and edges go to the force renderer verbatim. Cycles
+    // are just edges that close a loop; a recursive call is a self-edge. Entry is accented, externals are amber.
+    const root = graph.nodes.find((n) => n.id === graph.entry);
+    const stats =
+      `${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
+      (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
+      (graph.stats.truncated ? " · truncated" : "");
+    return GraphView.forceGraphDoc(
+      {
+        title: `graph — ${root?.label ?? graph.entry}`,
+        h1: root?.label ?? graph.entry,
+        sub: `${root?.loc.file ?? ""}${root?.loc.line ? ":" + root.loc.line : ""} · via ${graph.provider}`,
+        stats,
+        truncated: graph.stats.truncated ? "graph truncated — raise --depth for more, or pick a more specific entry" : undefined,
+      },
+      {
+        entry: graph.entry,
+        nodes: graph.nodes.map((n) => ({ id: n.id, label: n.label, kind: n.kind, file: n.loc.file, line: n.loc.line, scope: n.scope })),
+        edges: graph.edges.map((e) => ({ from: e.from, to: e.to, weight: e.weight ?? 1 })),
+      },
+    );
+  }
 
-  const body =
-    `<header>` +
-      `<h1>${esc(root?.label ?? graph.entry)}</h1>` +
-      `<div class="sub">${esc(root?.loc.file ?? "")}${root?.loc.line ? ":" + root.loc.line : ""} · via ${esc(graph.provider)}</div>` +
-      `<div class="stats">${esc(stats)}</div>` +
-      truncated +
-    `</header>` +
-    `<div class="controls">` +
-      `<button id="fit" type="button">fit</button>` +
-      `<button id="relayout" type="button">re-layout</button>` +
-      `<button id="freeze" type="button">freeze</button>` +
-      `<input id="filter" type="search" placeholder="filter functions…">` +
-      `<span class="legend"><i class="dot entry"></i>entry<i class="dot local"></i>local<i class="dot ext"></i>external<span class="hint">drag · scroll-zoom · hover</span></span>` +
-    `</div>` +
-    `<svg id="graph">` +
-      `<defs>` +
-        `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"></path></marker>` +
-      `</defs>` +
-      `<g id="viewport"><g id="edges"></g><g id="nodes"></g></g>` +
-    `</svg>`;
+  /**
+   * HTML view of the module-import graph (`deps`) — the whole repo as a graph, reusing the call-graph's
+   * force-directed renderer. Each module is a node, each import a directed edge (importer → imported). Module
+   * paths are long, so the node label is the basename and the full path lives in the hover title. madge gives no
+   * call counts, so every edge has weight 1.
+   */
+  static depsHtml(trace: Trace): string {
+    const g = trace.data.deps as DepGraph | undefined;
+    if (!g || !g.nodes?.length) {
+      const err = trace.diagnostics.find((d) => d.level === "error");
+      const msg = err ? `deps failed: ${err.message}` : "deps — no modules";
+      return GraphView.htmlDoc("trace-cli deps", `<p class="empty">${GraphView.esc(msg)}</p>`);
+    }
+    const stats = `${g.stats.modules} modules · ${g.stats.edges} imports` + (g.stats.circular ? ` · ${g.stats.circular} circular` : "");
+    return GraphView.forceGraphDoc(
+      {
+        title: `deps — ${g.stats.modules} modules`,
+        h1: "module graph",
+        sub: `${g.entry ?? ""} · via madge`,
+        stats,
+      },
+      {
+        entry: g.entry ?? "",
+        // label = basename for a readable node; full path goes in the hover title (file). All in-repo → "local".
+        nodes: g.nodes.map((n) => ({ id: n.id, label: n.id.split("/").pop() || n.id, kind: "module", file: n.id, line: 0, scope: "local" })),
+        edges: g.edges.map((e) => ({ from: e.from, to: e.to, weight: 1 })),
+      },
+    );
+  }
 
-  return htmlDoc(`graph — ${root?.label ?? graph.entry}`, body, {
-    style: GRAPH_CSS,
-    script: GRAPH_JS.replace("__DATA__", () => dataJson),
-  });
-}
+  /** HTML-escape a value for safe interpolation into page text/attributes. */
+  private static esc(s: unknown): string {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
 
-/**
- * Wrap a rendered body in a complete, self-contained HTML document. `extra.style` is appended after the base
- * chrome CSS and `extra.script` injected before </body> — the graph view passes the SVG styles + force-layout
- * JS this way, while the empty/error page uses neither.
- */
-function htmlDoc(title: string, body: string, extra?: { style?: string; script?: string }): string {
-  const t = title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `<!doctype html>
+  /**
+   * Shared force-graph page builder: serialize the payload safely, assemble the header/controls/SVG scaffold, and
+   * wrap it in the self-contained document. Both the call graph and the module-import graph render through here —
+   * one layout + interaction implementation, two data sources.
+   */
+  private static forceGraphDoc(meta: ForceMeta, payload: ForcePayload): string {
+    // Inline JSON safely: neutralize "<" (so "</script>" can't terminate the block) and the JS line separators.
+    const dataJson = JSON.stringify(payload)
+      .replace(/</g, "\\u003c")
+      .replace(new RegExp(String.fromCharCode(0x2028), "g"), "\\u2028")
+      .replace(new RegExp(String.fromCharCode(0x2029), "g"), "\\u2029");
+    const truncated = meta.truncated ? `<div class="warn">${GraphView.esc(meta.truncated)}</div>` : "";
+    const body =
+      `<header>` +
+        `<h1>${GraphView.esc(meta.h1)}</h1>` +
+        `<div class="sub">${GraphView.esc(meta.sub)}</div>` +
+        `<div class="stats">${GraphView.esc(meta.stats)}</div>` +
+        truncated +
+      `</header>` +
+      `<div class="controls">` +
+        `<button id="fit" type="button">fit</button>` +
+        `<button id="relayout" type="button">re-layout</button>` +
+        `<button id="freeze" type="button">freeze</button>` +
+        `<input id="filter" type="search" placeholder="filter functions…">` +
+        `<span class="legend"><i class="dot entry"></i>entry<i class="dot local"></i>local<i class="dot ext"></i>external<span class="hint">drag · scroll-zoom · hover</span></span>` +
+      `</div>` +
+      `<svg id="graph">` +
+        `<defs>` +
+          `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"></path></marker>` +
+        `</defs>` +
+        `<g id="viewport"><g id="edges"></g><g id="nodes"></g></g>` +
+      `</svg>`;
+    return GraphView.htmlDoc(meta.title, body, { style: GraphView.GRAPH_CSS, script: GraphView.GRAPH_JS.replace("__DATA__", () => dataJson) });
+  }
+
+  /**
+   * Wrap a rendered body in a complete, self-contained HTML document. `extra.style` is appended after the base
+   * chrome CSS and `extra.script` injected before </body> — the graph view passes the SVG styles + force-layout
+   * JS this way, while the empty/error page uses neither.
+   */
+  private static htmlDoc(title: string, body: string, extra?: { style?: string; script?: string }): string {
+    const t = title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${t}</title>
 <style>
-${HTML_BASE_CSS}${extra?.style ? "\n" + extra.style : ""}
+${GraphView.HTML_BASE_CSS}${extra?.style ? "\n" + extra.style : ""}
 </style>
 </head>
 <body>
 ${body}${extra?.script ? `\n<script>\n${extra.script}\n</script>` : ""}
 </body>
 </html>`;
-}
+  }
 
-/** Shared page chrome (header, controls, legend, empty state) — light/dark aware via the `--bg`/`--fg` vars. */
-const HTML_BASE_CSS = `  :root { color-scheme: light dark; --bg: #fbfbfd; --fg: #1d1d1f; }
+  /** Shared page chrome (header, controls, legend, empty state) — light/dark aware via the `--bg`/`--fg` vars. */
+  private static readonly HTML_BASE_CSS = `  :root { color-scheme: light dark; --bg: #fbfbfd; --fg: #1d1d1f; }
   @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #e6e6e8; } }
   body { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 0; padding: 1.25rem 1.5rem; background: var(--bg); color: var(--fg); }
   header h1 { margin: 0; font-size: 1.15rem; }
@@ -170,8 +221,8 @@ const HTML_BASE_CSS = `  :root { color-scheme: light dark; --bg: #fbfbfd; --fg: 
   .legend .hint { margin-left: 1rem; opacity: .8; }
   .dot.entry { background: #e8543f; } .dot.local { background: #5b8def; } .dot.ext { background: #caa45a; }`;
 
-/** Graph-view styles: the SVG canvas, edges (arrows), and nodes (circles + labels) with hover/filter states. */
-const GRAPH_CSS = `  #graph { width: 100%; height: 76vh; border: 1px solid #8883; border-radius: 10px; touch-action: none; cursor: grab; display: block; overflow: hidden;
+  /** Graph-view styles: the SVG canvas, edges (arrows), and nodes (circles + labels) with hover/filter states. */
+  private static readonly GRAPH_CSS = `  #graph { width: 100%; height: 76vh; border: 1px solid #8883; border-radius: 10px; touch-action: none; cursor: grab; display: block; overflow: hidden;
     background: radial-gradient(circle at 1px 1px, #8881 1px, transparent 0) 0 0 / 22px 22px, var(--bg); }
   #graph.grabbing { cursor: grabbing; }
   .edge { stroke: #8b94a3; stroke-opacity: .5; fill: none; }
@@ -191,13 +242,13 @@ const GRAPH_CSS = `  #graph { width: 100%; height: 76vh; border: 1px solid #8883
   .node.match circle { stroke: #e8543f; stroke-width: 2.6; }
   .edge.dim { stroke-opacity: .04; }`;
 
-/**
- * Force-directed layout + interaction for the graph view, as a plain-JS IIFE (no build step, no deps). It
- * receives the node/edge payload at the `__DATA__` placeholder, builds the SVG, runs a cooling simulation
- * (repulsion + link springs + a gentle caller-above-callee bias), then idles. Intentionally template-free
- * (string concatenation, no backticks / ${}) so it embeds cleanly inside the document template literal.
- */
-const GRAPH_JS = `(function () {
+  /**
+   * Force-directed layout + interaction for the graph view, as a plain-JS IIFE (no build step, no deps). It
+   * receives the node/edge payload at the `__DATA__` placeholder, builds the SVG, runs a cooling simulation
+   * (repulsion + link springs + a gentle caller-above-callee bias), then idles. Intentionally template-free
+   * (string concatenation, no backticks / ${}) so it embeds cleanly inside the document template literal.
+   */
+  private static readonly GRAPH_JS = `(function () {
   var DATA = __DATA__;
   var NS = "http://www.w3.org/2000/svg";
   var svg = document.getElementById("graph");
@@ -243,7 +294,8 @@ const GRAPH_JS = `(function () {
     var c = document.createElementNS(NS, "circle"); c.setAttribute("r", n.r);
     var tx = document.createElementNS(NS, "text"); tx.setAttribute("x", n.r + 4); tx.setAttribute("y", 4); tx.textContent = n.label;
     var ti = document.createElementNS(NS, "title");
-    ti.textContent = n.label + (n.scope === "local" ? ("  " + n.file + ":" + n.line) : ("  external: " + n.scope));
+    var meta = n.scope === "local" ? (n.file ? ("  " + n.file + (n.line ? ":" + n.line : "")) : "") : ("  external: " + n.scope);
+    ti.textContent = n.label + meta;
     g.appendChild(c); g.appendChild(tx); g.appendChild(ti);
     gN.appendChild(g); n.el = g;
     g.addEventListener("pointerdown", function (ev) { startDrag(ev, n); });
@@ -374,3 +426,4 @@ const GRAPH_JS = `(function () {
   var s0 = size(); view.x = s0.w / 2; view.y = s0.h / 2; applyView();
   reheat(1);
 })();`;
+}
