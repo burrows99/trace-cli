@@ -61,8 +61,30 @@ function StackFrame({ frame }: { frame: string }) {
   );
 }
 
-function Mutations({ lineage }: { lineage?: Lineage[] }) {
-  if (!lineage || !lineage.length) return null;
+function Mutations({
+  lineage,
+  eventCount,
+}: {
+  lineage?: Lineage[];
+  eventCount: number;
+}) {
+  // Explain an empty section rather than hiding it: lineage is value-over-time, so it needs a value that
+  // changes across ≥2 hits. A single-hit trace (e.g. an error path that throws on first execution) has no
+  // series to compare — say so, instead of silently dropping the panel.
+  if (!lineage || !lineage.length) {
+    const why =
+      eventCount === 0
+        ? "No breakpoint hits were captured, so there are no values to track over time."
+        : eventCount === 1
+          ? "Lineage tracks how a value changes across hits — this trace captured a single hit, so there's no series to compare. Aim the breakpoint at a line that runs more than once (e.g. inside a loop) to see a value mutate."
+          : `No watched expression or local changed across the ${eventCount} hits — every value held steady.`;
+    return (
+      <div className="mutations empty-sec">
+        <h4>lineage · how values mutated across hits</h4>
+        <div className="why">{why}</div>
+      </div>
+    );
+  }
   return (
     <div className="mutations">
       <h4>lineage · how values mutated across hits</h4>
@@ -121,8 +143,29 @@ function Mutations({ lineage }: { lineage?: Lineage[] }) {
   );
 }
 
-function RecordingView({ rec }: { rec?: Recording }) {
-  if (!rec) return null;
+function RecordingView({
+  rec,
+  targetKind,
+}: {
+  rec?: Recording;
+  targetKind?: string;
+}) {
+  // A Chrome run always records a replay, so its absence is a real signal (no frames / errored before
+  // render) worth surfacing. A Node trace has no video by design, so stay silent there.
+  if (!rec) {
+    if (targetKind === "chrome")
+      return (
+        <div className="recording empty-sec">
+          <h4>recording</h4>
+          <div className="why">
+            No replay was attached — a Chrome run records a screen + trace-panel
+            video, but this one captured no frames (it may have errored before
+            rendering).
+          </div>
+        </div>
+      );
+    return null;
+  }
   if (rec.url) {
     const kb = rec.bytes ? ` · ${Math.round(rec.bytes / 1024)} KB` : "";
     return (
@@ -395,8 +438,8 @@ function Detail({
         </div>
       ))}
 
-      <RecordingView rec={d.recording} />
-      <Mutations lineage={d.lineage} />
+      <RecordingView rec={d.recording} targetKind={t?.kind} />
+      <Mutations lineage={d.lineage} eventCount={events.length} />
 
       <div className="events">
         {events.length ? (
@@ -409,7 +452,11 @@ function Detail({
             />
           ))
         ) : (
-          <div className="empty">no events</div>
+          <div className="empty">
+            {m.running
+              ? "Waiting for the first breakpoint hit…"
+              : "No breakpoint hits were captured — the breakpoint line didn't execute on this trigger (check the diagnostics above for an unbound breakpoint)."}
+          </div>
         )}
       </div>
 

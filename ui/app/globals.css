@@ -81,6 +81,9 @@ pre.resp { background: var(--panel2); border: 1px solid var(--border); border-ra
 .mpath .last { color: var(--green); font-weight: 600; }
 .mpath .arr { color: var(--accent); opacity: .6; padding: 0 5px; }
 .mcount { color: var(--muted); font-size: 11px; white-space: nowrap; }
+/* Empty-state sections: explain why a panel has no data instead of vanishing — muted accent + a readable note. */
+.empty-sec { border-left-color: var(--border); }
+.why { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin-top: 6px; max-width: 72ch; }
 .recording { padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .recording > h4 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
 .recording video { max-width: 520px; width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #000; display: block; }
