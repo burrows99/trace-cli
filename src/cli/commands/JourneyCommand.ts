@@ -9,6 +9,7 @@ import { JourneyRunner, StepResult, type Step } from "../../engine/JourneyRunner
 import { Screencaster } from "../../engine/Screencaster.js";
 import { Recorder } from "../../engine/Recorder.js";
 import { BreakpointResolver } from "../../engine/BreakpointResolver.js";
+import { CliCommand } from "./CliCommand.js";
 
 export interface JourneyRequest {
   port: number;
@@ -62,7 +63,7 @@ export class JourneyResult {
  * captures what a *user* sees clicking through a flow (e.g. Pulse → Impersonate → the patient app → results).
  * With `--bp`, it also captures breakpoint hits during the flow and lays the trace panel beside the screen.
  */
-export class JourneyCommand {
+export class JourneyCommand extends CliCommand<JourneyRequest, JourneyResult> {
   /** Parse a `--step` string: `action`, `action:arg`, or `type:<selector>=<text>`. */
   static parseStep(raw: string): Step {
     const colon = raw.indexOf(":");

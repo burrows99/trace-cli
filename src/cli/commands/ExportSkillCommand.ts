@@ -2,6 +2,8 @@ import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CliCommand } from "./CliCommand.js";
+
 export interface ExportSkillRequest {
   dir?: string;     // target project root (default: cwd)
   force?: boolean;  // overwrite an existing .claude/skills/trace
@@ -15,7 +17,7 @@ export interface ExportSkillResult { src: string; dest: string }
  * `files`), so this is a self-install: anyone who has the CLI can drop the skill into their repo without
  * cloning this one. Source resolution tolerates every run mode (compiled dist, plugin install, repo).
  */
-export class ExportSkillCommand {
+export class ExportSkillCommand extends CliCommand<ExportSkillRequest, ExportSkillResult> {
   static readonly SKILL_NAME = "trace";
 
   /** Locate the bundled `skills/trace` dir across run modes (dist build, plugin, repo cwd). */

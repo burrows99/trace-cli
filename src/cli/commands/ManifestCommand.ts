@@ -1,6 +1,7 @@
 import type { Argument, Command, Option } from "commander";
 
 import { VERSION } from "../../shared/version.js";
+import { CliCommand } from "./CliCommand.js";
 
 /** One option, flattened to the public Commander metadata that defines it. */
 export interface ManifestOption {
@@ -55,7 +56,7 @@ export interface Manifest {
  * Deterministic: definition order is preserved (no map iteration, no timestamps, no randomness), so a
  * given build always produces byte-identical output.
  */
-export class ManifestCommand {
+export class ManifestCommand extends CliCommand<Command, Manifest> {
   run(program: Command): Manifest {
     return { tool: "trace", version: VERSION, command: this.#command(program) };
   }

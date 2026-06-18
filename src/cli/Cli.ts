@@ -3,12 +3,12 @@ import { writeFileSync } from "node:fs";
 
 import { DynamicCommand, type DynamicTargetKind } from "./commands/DynamicCommand.js";
 import { JourneyCommand } from "./commands/JourneyCommand.js";
+import { GraphCommand } from "./commands/GraphCommand.js";
 import { DoctorCommand } from "./commands/DoctorCommand.js";
 import { ExportSkillCommand } from "./commands/ExportSkillCommand.js";
 import { ManifestCommand } from "./commands/ManifestCommand.js";
 import { SchemaCommand } from "./commands/SchemaCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
-import { Renderer } from "../engine/Renderer.js";
 import { Tracer } from "../engine/Tracer.js";
 import { Collector } from "../collector/Collector.js";
 import { S3ArtifactStore } from "../storage/S3ArtifactStore.js";
@@ -16,7 +16,9 @@ import { VERSION } from "../shared/version.js";
 import { TargetKind } from "../domain/Target.js";
 import { Diagnostic } from "../domain/Diagnostic.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
-import { DynamicInput, JourneyInput } from "./CommandInputs.js";
+import { DynamicInput, JourneyInput, GraphInput } from "./CommandInputs.js";
+import { Loc } from "../domain/Loc.js";
+import type { EntryRef } from "../codegraph/CodeGraphProvider.js";
 import { logger } from "../shared/logger.js";
 import type { Trace } from "../domain/Trace.js";
 
@@ -28,6 +30,15 @@ const usage = (msg: string): never => { process.stderr.write(`trace: ${msg}\n`);
 function pickTarget(o: any): { target: DynamicTargetKind; port: number } {
   if (o.chrome != null) return { target: TargetKind.Chrome, port: o.chrome };
   return { target: TargetKind.Node, port: o.node === undefined || o.node === true ? DEFAULT_NODE_PORT : int(o.node) };
+}
+
+/** Parse a graph `--entry`: `file@symbol` → {file, symbol}; `file:line[:col]` → {file, line, col?}; else {file}. */
+function parseEntry(ref: string): EntryRef {
+  const at = ref.indexOf("@");
+  if (at >= 0) return { file: ref.slice(0, at), symbol: ref.slice(at + 1) };
+  const loc = Loc.parse(ref);
+  if (loc?.line) return { file: loc.file, line: loc.line, ...(loc.col != null ? { col: loc.col } : {}) };
+  return { file: ref };
 }
 
 /** emit policy: bare --json → JSON to stdout; --json <path> → file (stdout stays human); else human. */
@@ -69,7 +80,7 @@ export class Cli {
       args: { target, port, bp: o.bp, ...(o.curl ? { curl: o.curl } : {}), ...(o.url ? { url: o.url } : {}) },
     });
 
-    emit(trace, () => Renderer.render(trace) + Renderer.renderLineage(trace.data.lineage), o);
+    emit(trace, () => this.#dynamic.render(trace), o);
     const collector = process.env.TRACE_COLLECTOR_URL;
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
@@ -90,6 +101,27 @@ export class Cli {
     if (o.json) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
     else process.stdout.write(cmd.render(result) + "\n");
     process.exit(result.ok && problems.length === 0 ? 0 : 1);
+  }
+
+  async #runGraph(o: any): Promise<void> {
+    const entry = parseEntry(o.entry);
+    const input = new GraphInput({ file: entry.file, line: entry.line, col: entry.col, symbol: entry.symbol, depth: o.depth });
+    const badInput = input.validate();
+    if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
+
+    const cmd = new GraphCommand();
+    const trace = await cmd.run({
+      entry,
+      root: o.root, // optional — GraphCommand auto-detects the project root from the entry when absent
+      maxDepth: o.depth,
+      server: o.server,
+      args: { entry: o.entry, ...(o.root ? { root: o.root } : {}), ...(o.server ? { server: o.server } : {}), depth: o.depth },
+    });
+
+    emit(trace, () => cmd.render(trace), o);
+    const collector = process.env.TRACE_COLLECTOR_URL;
+    if (collector) await Collector.emit(collector, trace.toJSON());
+    process.exit(trace.hasErrors() ? 1 : 0);
   }
 
   build(): Command {
@@ -117,6 +149,15 @@ export class Cli {
       .option("--out <mp4>", "output video path (default: a temp file)")
       .option("--json", "print the journey result as JSON instead of a human summary")
       .action((o) => this.#runJourney(o));
+
+    program.command("graph")
+      .description("call graph rooted at an entry → the flow tree for a function/route, via LSP call hierarchy")
+      .requiredOption("--entry <ref>", "where to start: file:line, file:line:col, or file@symbol (e.g. src/auth.service.ts:42:9 or src/auth.service.ts@exchangeToken)")
+      .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git above the entry)")
+      .option("--server <cmd>", "override the LSP server (default: auto by file extension; bundled typescript-language-server for TS/JS, e.g. \"gopls\", \"pyright --stdio\")")
+      .option("--depth <n>", "max call depth expanded from the entry", int, 6)
+      .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
+      .action((o) => this.#runGraph(o));
 
     program.command("doctor")
       .description("report which backing tools are installed (+ versions), grouped by pillar")

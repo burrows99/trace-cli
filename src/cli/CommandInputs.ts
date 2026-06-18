@@ -4,7 +4,7 @@
  * array shapes) using the same class-validator regime as the domain envelope. The CLI builds one of these
  * from the parsed flags and rejects the invocation (exit 2) before any tracer/engine work begins.
  */
-import { ArrayNotEmpty, IsArray, IsIn, IsInt, IsOptional, IsString, Max, Min, validateSync } from "class-validator";
+import { ArrayNotEmpty, IsArray, IsIn, IsInt, IsOptional, IsString, Max, Min, validateSync, ValidateIf } from "class-validator";
 import { TargetKind } from "../domain/Target.js";
 
 const MAX_PORT = 65535;
@@ -30,6 +30,23 @@ export class DynamicInput {
     this.port = init.port ?? 0;
     this.breakpoints = init.breakpoints ?? [];
     this.exprs = init.exprs ?? [];
+    Object.assign(this, init);
+  }
+
+  validate(): string[] { return problems(this); }
+}
+
+/** Input contract for `trace-cli graph`. Requires a file plus an anchor: a line (optional col) or a symbol. */
+export class GraphInput {
+  @IsString() file: string;
+  @ValidateIf((o) => o.symbol === undefined) @IsInt() @Min(1) line?: number;
+  @IsOptional() @IsInt() @Min(1) col?: number;
+  @IsOptional() @IsString() symbol?: string;
+  @IsOptional() @IsString() server?: string;
+  @IsOptional() @IsInt() @Min(1) depth?: number;
+
+  constructor(init: Partial<GraphInput> = {}) {
+    this.file = init.file ?? "";
     Object.assign(this, init);
   }
 

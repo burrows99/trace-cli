@@ -1,13 +1,14 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
-import { Trace, TraceMeta, TraceData } from "../../domain/Trace.js";
+import { createRequire } from "node:module";
+import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
-import { VERSION } from "../../shared/version.js";
+import { TraceCommand } from "./TraceCommand.js";
 
 const pexec = promisify(execFile);
 
-interface ToolDef { name: string; pillar: string; purpose: string; cmd?: string; args?: string[]; chrome?: boolean; s3?: boolean; db?: boolean; }
+interface ToolDef { name: string; pillar: string; purpose: string; cmd?: string; args?: string[]; chrome?: boolean; s3?: boolean; db?: boolean; mod?: string; }
 export interface ToolStatus { name: string; pillar: string; purpose: string; present: boolean; version?: string; }
 
 const TOOLS: ToolDef[] = [
@@ -18,6 +19,7 @@ const TOOLS: ToolDef[] = [
   { name: "lizard", pillar: "static", purpose: "static complexity", cmd: "lizard", args: ["--version"] },
   { name: "tree-sitter", pillar: "static", purpose: "static symbols (AST)", cmd: "tree-sitter", args: ["--version"] },
   { name: "madge", pillar: "static", purpose: "static deps (JS/TS)", cmd: "madge", args: ["--version"] },
+  { name: "typescript-language-server", pillar: "static", purpose: "code graph — `trace graph` default LSP server (wraps tsserver)", mod: "typescript-language-server" },
   { name: "otel-cli", pillar: "runtime", purpose: "exec spans (OTel)", cmd: "otel-cli", args: ["--version"] },
   { name: "playwright", pillar: "frontend", purpose: "web traces", cmd: "playwright", args: ["--version"] },
   { name: "s3", pillar: "storage", purpose: "upload recordings (S3_ENDPOINT)", s3: true },
@@ -25,7 +27,7 @@ const TOOLS: ToolDef[] = [
 ];
 
 /** DoctorCommand — probes every backing tool and reports presence + version, grouped by pillar. */
-export class DoctorCommand {
+export class DoctorCommand extends TraceCommand {
   static chromePath(): string | null {
     if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN;
     const candidates = [
@@ -51,6 +53,16 @@ export class DoctorCommand {
       const p = DoctorCommand.chromePath();
       return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: !!p, version: p ?? undefined };
     }
+    if (t.mod) {
+      // A resolved package dependency (the bundled LSP server), not a CLI on PATH — read its package version.
+      try {
+        const require = createRequire(import.meta.url);
+        const pkg = require(`${t.mod}/package.json`);
+        return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: true, version: pkg.version ? `${t.mod} ${pkg.version}` : "present" };
+      } catch {
+        return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: false };
+      }
+    }
     try {
       const { stdout, stderr } = await pexec(t.cmd!, t.args!, { timeout: 5000 });
       const version = (stdout || stderr || "").trim().split("\n")[0] || "present";
@@ -65,12 +77,8 @@ export class DoctorCommand {
     const toolVersions: Record<string, string> = {};
     for (const t of tools) if (t.present && t.version) toolVersions[t.name] = t.version;
     const diagnostics = tools.filter((t) => !t.present).map((t) => Diagnostic.warn("TOOL_MISSING", `${t.name} not found — ${t.purpose} (pillar: ${t.pillar})`));
-    return new Trace({
-      version: VERSION, command: "doctor", ok: true,
-      meta: new TraceMeta({ at: new Date().toISOString(), toolVersions }),
-      data: new TraceData({ tools }),
-      diagnostics,
-    });
+    // Missing tools are warnings, never errors — doctor itself always succeeds (ok: true).
+    return this.envelope({ command: "doctor", ok: true, data: new TraceData({ tools }), diagnostics, toolVersions });
   }
 
   render(trace: Trace): string {

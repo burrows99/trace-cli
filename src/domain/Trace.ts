@@ -47,6 +47,7 @@ export class TraceData {
   @IsOptional() @IsString() finalUrl?: string;
   @IsOptional() @IsString() screenshot?: string;
   @IsOptional() tools?: unknown[];
+  @IsOptional() graph?: unknown; // `graph` command payload: a CodeGraph {nodes, edges, …} (see codegraph/)
 
   constructor(init: Partial<TraceData> = {}) { Object.assign(this, init); }
 }

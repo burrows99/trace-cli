@@ -42,7 +42,11 @@
     "commander": "^12.1.0",
     "pg": "^8.21.0",
     "reflect-metadata": "^0.2.2",
-    "source-map": "^0.7.4"
+    "source-map": "^0.7.4",
+    "typescript": "^6.0.3",
+    "typescript-language-server": "^5.3.0",
+    "vscode-jsonrpc": "^9.0.0",
+    "vscode-languageserver-protocol": "^3.18.0"
   },
   "keywords": [
     "cdp",
@@ -62,7 +66,6 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
-    "@types/pg": "^8.20.0",
-    "typescript": "^6.0.3"
+    "@types/pg": "^8.20.0"
   }
 }
