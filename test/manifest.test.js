@@ -16,7 +16,7 @@ test("manifest describes the tool and the whole command tree", () => {
   assert.equal(m.command.name, "trace");
   const names = m.command.commands.map((c) => c.name).sort();
   // Generated from the parser — every registered subcommand appears, including manifest itself.
-  assert.deepEqual(names, ["doctor", "dynamic", "manifest", "schema", "serve"]);
+  assert.deepEqual(names, ["doctor", "dynamic", "export-skill", "manifest", "schema", "serve"]);
 });
 
 test("manifest captures option metadata: flags, defaults, negate", () => {

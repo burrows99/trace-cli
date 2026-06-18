@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 
 import { DynamicCommand, type DynamicTargetKind } from "./commands/DynamicCommand.js";
 import { DoctorCommand } from "./commands/DoctorCommand.js";
+import { ExportSkillCommand } from "./commands/ExportSkillCommand.js";
 import { ManifestCommand } from "./commands/ManifestCommand.js";
 import { SchemaCommand } from "./commands/SchemaCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
@@ -119,6 +120,22 @@ export class Cli {
       .action(() => {
         process.stdout.write(JSON.stringify(new ManifestCommand().run(program), null, 2) + "\n");
         process.exit(0);
+      });
+
+    program.command("export-skill")
+      .description("copy the bundled `trace` skill into a project's .claude/skills/ so Claude Code picks it up")
+      .argument("[dir]", "target project root (default: current directory)")
+      .option("--force", "overwrite an existing .claude/skills/trace")
+      .action((dir, o) => {
+        try {
+          const { src, dest } = new ExportSkillCommand().run({ dir, force: o.force });
+          process.stdout.write(`[trace] skill exported → ${dest}\n`);
+          process.stderr.write(`[trace] source: ${src}\n`);
+          process.exit(0);
+        } catch (e: any) {
+          process.stderr.write(`trace: ${e.message}\n`);
+          process.exit(1);
+        }
       });
 
     return program;

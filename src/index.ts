@@ -20,5 +20,6 @@ export type { StoreOptions } from "./collector/createSessionStore.js";
 export type { SessionStore, SessionSummary } from "./collector/SessionStore.js";
 export { DynamicCommand } from "./cli/commands/DynamicCommand.js";
 export { DoctorCommand } from "./cli/commands/DoctorCommand.js";
+export { ExportSkillCommand } from "./cli/commands/ExportSkillCommand.js";
 export { Cli } from "./cli/Cli.js";
 export { VERSION } from "./shared/version.js";
