@@ -18,7 +18,7 @@ import { VERSION } from "../shared/version.js";
 import { TargetKind } from "../domain/Target.js";
 import { Diagnostic } from "../domain/Diagnostic.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
-import { DynamicInput, GraphInput } from "./CommandInputs.js";
+import { DynamicInput, GraphInput, validateSteps } from "./CommandInputs.js";
 import { EntryRef } from "../codegraph/CodeGraphProvider.js";
 import { logger } from "../shared/logger.js";
 import type { Trace } from "../domain/Trace.js";
@@ -69,6 +69,11 @@ export class Cli {
     const input = new DynamicInput({ target, port, launch, breakpoints: o.bp, exprs: o.expr, steps, curl: o.curl });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
+
+    // Strict step vocabulary: reject an unknown action (`--step frobnicate:x`) or a missing required arg before
+    // any browser work, so the failure names the allowed verbs instead of silently no-op'ing in the runner.
+    const badSteps = validateSteps(steps);
+    if (badSteps.length) usage(`invalid step — ${badSteps.join("; ")}`);
 
     // Redact secrets before they reach the envelope's meta.args: a `type:` step carries typed text (passwords),
     // an `eval:` step an arbitrary script body.

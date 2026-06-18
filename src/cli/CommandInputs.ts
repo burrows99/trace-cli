@@ -4,11 +4,43 @@
  * array shapes) using the same class-validator regime as the domain envelope. The CLI builds one of these
  * from the parsed flags and rejects the invocation (exit 2) before any tracer/engine work begins.
  */
-import { ArrayNotEmpty, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateIf } from "class-validator";
+import { ArrayNotEmpty, IsArray, IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min, ValidateIf } from "class-validator";
 import { TargetKind } from "../domain/Target.js";
 import { validateStrict } from "../shared/validation.js";
+import { STEP_ACTIONS, STEP_ACTIONS_NEEDING_ARG, parseStep } from "../engine/JourneyStep.js";
 
 const MAX_PORT = 65535;
+
+/**
+ * Input contract for one chrome journey `--step`. Strict vocabulary: `action` must be a known verb (the agent's
+ * full, closed set is {@link STEP_ACTIONS}), and an action that operates on a target (goto/click/type/waitfor/
+ * eval) must carry a non-empty `arg`. This is the gate that turns a typo like `--step frobnicate:x` into a
+ * clear exit-2 error instead of a silent no-op in the runner's switch.
+ */
+export class StepInput {
+  @IsIn(STEP_ACTIONS as unknown as string[]) action!: string;
+  @ValidateIf((o) => STEP_ACTIONS_NEEDING_ARG.has(o.action)) @IsNotEmpty() arg?: string;
+  @IsOptional() @IsString() value?: string;
+
+  constructor(init: Partial<StepInput> = {}) { Object.assign(this, init); }
+
+  validate(): string[] { return validateStrict(this); }
+}
+
+/**
+ * Validate every `--step` string against the vocabulary. Returns [] when all valid, else one line per problem
+ * prefixed with the step's index + action — never the raw value, which may carry a typed credential.
+ */
+export function validateSteps(raw: string[]): string[] {
+  const errs: string[] = [];
+  raw.forEach((s, i) => {
+    const step = parseStep(s);
+    const at = `step #${i + 1} (${step.action || "?"})`;
+    for (const m of new StepInput(step).validate()) errs.push(`${at}: ${m}`);
+    if (step.action === "wait" && step.arg && !/^\d+$/.test(step.arg)) errs.push(`${at}: wait arg must be milliseconds (a positive integer)`);
+  });
+  return errs;
+}
 
 /** Input contract for `trace-cli dynamic`. */
 export class DynamicInput {

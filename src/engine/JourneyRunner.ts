@@ -7,11 +7,12 @@ import { Screencaster } from "./Screencaster.js";
 import { PageActions } from "./PageActions.js";
 import { TabTracer } from "./TabTracer.js";
 import { type ResolvedBp } from "./BreakpointResolver.js";
+import { type Step, parseStep } from "./JourneyStep.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
 import { sleep } from "../shared/sleep.js";
 
-export interface Step { action: "goto" | "eval" | "click" | "type" | "wait" | "waitfor" | "newtab"; arg?: string; value?: string; }
+export type { Step } from "./JourneyStep.js";
 
 /** StepResult — the validated outcome of one journey step (a failure becomes a STEP_FAILED diagnostic on the Trace). */
 export class StepResult {
@@ -56,16 +57,9 @@ export class JourneyRunner {
 
   constructor(port: number, cast: Screencaster, trace?: TraceConfig) { this.#port = port; this.#cast = cast; this.#trace = trace; }
 
-  /** Parse a `--step` string: `action`, `action:arg`, or `type:<selector>=<text>`. */
+  /** Parse a `--step` string into a {@link Step}. Vocabulary is validated upstream by `StepInput`, not here. */
   static parseStep(raw: string): Step {
-    const colon = raw.indexOf(":");
-    const action = (colon === -1 ? raw : raw.slice(0, colon)).trim() as Step["action"];
-    const rest = colon === -1 ? "" : raw.slice(colon + 1);
-    if (action === "type") {
-      const eq = rest.indexOf("=");
-      return { action, arg: eq === -1 ? rest : rest.slice(0, eq), value: eq === -1 ? "" : rest.slice(eq + 1) };
-    }
-    return rest ? { action, arg: rest } : { action };
+    return parseStep(raw);
   }
 
   /** Breakpoint-binding report merged across tabs — a bp counts as bound if it bound in any tab the journey drove. */
