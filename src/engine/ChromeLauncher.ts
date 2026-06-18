@@ -47,7 +47,11 @@ export interface LaunchedChrome {
  * entirely, which is how you trace a real, already-open session.
  */
 export class ChromeLauncher {
-  static async launch(extraArgs: string[] = []): Promise<LaunchedChrome> {
+  // `purpose` only labels the log line, so a launch is never mistaken for the attached trace target: the
+  // recorder spins up its own throwaway Chrome to render the trace-panel video ("video render"), which is
+  // distinct from the trace target Chrome that bare `--chrome` launches ("trace target").
+  static async launch(extraArgs: string[] = [], opts: { purpose?: string } = {}): Promise<LaunchedChrome> {
+    const purpose = opts.purpose ?? "trace target";
     const bin = chromeBinary();
     if (!bin) throw new Error("no Chrome found to launch (set CHROME_BIN, or pass --chrome <port> to attach to a running one)");
     const port = await freePort();
@@ -61,7 +65,7 @@ export class ChromeLauncher {
     proc.on("error", (e) => log.error("chrome launch failed", { bin, err: String(e) }));
 
     for (let i = 0; i < 80; i++) {
-      try { await (await fetch(`http://localhost:${port}/json/version`)).json(); log.info("launched headless chrome", { port });
+      try { await (await fetch(`http://localhost:${port}/json/version`)).json(); log.info(`launched headless chrome (${purpose})`, { port, purpose });
         return { port, kill() { try { proc.kill("SIGKILL"); } catch { /* ignore */ } cleanup(); } };
       } catch { await sleep(100); }
     }

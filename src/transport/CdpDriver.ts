@@ -74,6 +74,20 @@ export class CdpDriver implements ProtocolDriver {
     return (await res.json()) as any[];
   }
 
+  /**
+   * Open a fresh page target on a Chrome `--remote-debugging-port` and return its descriptor (`{ id, url,
+   * webSocketDebuggerUrl, … }`). Lets a caller attach to a debug Chrome that's up but has no tab, instead of
+   * failing. The DevTools HTTP endpoint requires a PUT for `/json/new` on modern Chrome; the URL to open is
+   * the raw query string (default `about:blank`, which the first navigation then replaces).
+   */
+  static async createPageTarget(port: number, url = "about:blank", timeoutMs = 4000): Promise<any> {
+    let res: Response;
+    try { res = await fetch(`http://localhost:${port}/json/new?${url}`, { method: "PUT", signal: AbortSignal.timeout(timeoutMs) }); }
+    catch (e: any) { throw new Error(`cannot open a tab on :${port} (${e?.message || String(e)})`); }
+    if (!res.ok) throw new Error(`Chrome refused to open a tab on :${port} (HTTP ${res.status})`);
+    return await res.json();
+  }
+
   static async resolveWsUrl(
     port: number,
     opts: { kind?: TargetKind; urlMatch?: string; titleMatch?: string } = {},

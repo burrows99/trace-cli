@@ -80,7 +80,7 @@ export class Recorder {
     const MAX = 160;
     const pick = frames.length > MAX ? Array.from({ length: MAX }, (_, i) => frames[Math.floor(i * (frames.length / MAX))]) : frames;
     const dir = mkdtempSync(join(tmpdir(), "trace-journey-"));
-    const chrome = await ChromeLauncher.launch(["--force-device-scale-factor=1"]);
+    const chrome = await ChromeLauncher.launch(["--force-device-scale-factor=1"], { purpose: "video render" });
     let driver: CdpDriver | undefined;
     try {
       const targets = await (await fetch(`http://localhost:${chrome.port}/json`)).json() as any[];
