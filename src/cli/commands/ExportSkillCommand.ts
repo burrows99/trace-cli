@@ -22,27 +22,27 @@ export class ExportSkillCommand extends CliCommand<ExportSkillRequest, ExportSki
 
   /** Locate the bundled `skills/trace` dir across run modes (dist build, plugin, repo cwd). */
   #resolveSource(): string {
-    const candidates = [
+    const candidatePaths = [
       // dist/cli/commands/ExportSkillCommand.js → package root → skills/trace
       fileURLToPath(new URL("../../../skills/trace", import.meta.url)),
       ...(process.env.CLAUDE_PLUGIN_ROOT ? [join(process.env.CLAUDE_PLUGIN_ROOT, "skills", "trace")] : []),
       join(process.cwd(), "skills", "trace"),
     ];
-    const found = candidates.find((p) => existsSync(join(p, "SKILL.md")));
-    if (!found) throw new Error(`bundled '${ExportSkillCommand.SKILL_NAME}' skill not found (looked in: ${candidates.join(", ")})`);
-    return found;
+    const foundPath = candidatePaths.find((candidatePath) => existsSync(join(candidatePath, "SKILL.md")));
+    if (!foundPath) throw new Error(`bundled '${ExportSkillCommand.SKILL_NAME}' skill not found (looked in: ${candidatePaths.join(", ")})`);
+    return foundPath;
   }
 
-  run(req: ExportSkillRequest = {}): ExportSkillResult {
-    const src = this.#resolveSource();
-    const projectRoot = resolve(req.dir ?? process.cwd());
-    const skillsDir = join(projectRoot, ".claude", "skills");
-    const dest = join(skillsDir, ExportSkillCommand.SKILL_NAME);
-    if (existsSync(dest) && !req.force) {
-      throw new Error(`${dest} already exists — pass --force to overwrite`);
+  run(request: ExportSkillRequest = {}): ExportSkillResult {
+    const sourcePath = this.#resolveSource();
+    const projectRoot = resolve(request.dir ?? process.cwd());
+    const skillsDirectory = join(projectRoot, ".claude", "skills");
+    const destinationPath = join(skillsDirectory, ExportSkillCommand.SKILL_NAME);
+    if (existsSync(destinationPath) && !request.force) {
+      throw new Error(`${destinationPath} already exists — pass --force to overwrite`);
     }
-    mkdirSync(skillsDir, { recursive: true });
-    cpSync(src, dest, { recursive: true, force: true });
-    return { src, dest };
+    mkdirSync(skillsDirectory, { recursive: true });
+    cpSync(sourcePath, destinationPath, { recursive: true, force: true });
+    return { src: sourcePath, dest: destinationPath };
   }
 }

@@ -13,10 +13,10 @@ cd test/servers/react-app && npm install && npm run dev
   --headless=new --remote-debugging-port=9334 --user-data-dir=/tmp/chrome-trace about:blank &
 
 # 3) trace the render — the .ts breakpoint resolves through Vite's source map
-trace dynamic --chrome 9334 --url http://localhost:5180 \
+trace run --chrome 9334 --url http://localhost:5180 \
   --root test/servers/react-app \
-  --bp "src/price.ts@total = subtotal" \
-  --expr qty --expr code \
+  --breakpoint "src/price.ts@total = subtotal" \
+  --expression qty --expression code \
   --emit http://localhost:4747            # ← show it live in the UI
 ```
 

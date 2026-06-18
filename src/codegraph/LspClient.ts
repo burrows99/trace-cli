@@ -5,6 +5,7 @@ import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type
 import { InitializeRequest, InitializedNotification, ShutdownRequest, ExitNotification, type InitializeParams, type InitializeResult } from "vscode-languageserver-protocol";
 
 import { logger } from "../shared/logger.js";
+import { Code } from "../shared/codes.js";
 
 const log = logger.child({ component: "lsp" });
 
@@ -19,10 +20,10 @@ export interface LspServerSpec {
  * Run via the current Node so it works whether trace-cli is installed locally or globally — no PATH assumption.
  */
 export function defaultTsServer(): LspServerSpec {
-  const require = createRequire(import.meta.url);
-  const pkgPath = require.resolve("typescript-language-server/package.json");
-  const bin = (require("typescript-language-server/package.json").bin as Record<string, string>)["typescript-language-server"];
-  return { command: process.execPath, args: [join(dirname(pkgPath), bin), "--stdio"] };
+  const requireModule = createRequire(import.meta.url);
+  const packageJsonPath = requireModule.resolve("typescript-language-server/package.json");
+  const binRelativePath = (requireModule("typescript-language-server/package.json").bin as Record<string, string>)["typescript-language-server"];
+  return { command: process.execPath, args: [join(dirname(packageJsonPath), binRelativePath), "--stdio"] };
 }
 
 /** TypeScript/JavaScript extensions handled by the bundled server. */
@@ -38,11 +39,11 @@ const SERVER_BY_EXT: Record<string, string> = {
 
 /** Pick the default LSP server for a file by its extension (bundled TS server for TS/JS). */
 export function serverForFile(file: string): LspServerSpec {
-  const ext = extname(file).toLowerCase();
-  if (TS_EXT.has(ext)) return defaultTsServer();
-  const cmd = SERVER_BY_EXT[ext];
-  if (!cmd) throw new Error(`no default LSP server for "${ext}" files — pass --server "<command>"`);
-  const [command, ...args] = cmd.split(/\s+/);
+  const extension = extname(file).toLowerCase();
+  if (TS_EXT.has(extension)) return defaultTsServer();
+  const commandLine = SERVER_BY_EXT[extension];
+  if (!commandLine) throw new Error(`no default LSP server for "${extension}" files — pass --server "<command>"`);
+  const [command, ...args] = commandLine.split(/\s+/);
   return { command, args };
 }
 
@@ -51,8 +52,8 @@ export function serverForFile(file: string): LspServerSpec {
  * file's extension. So the common case needs no server flag at all.
  */
 export function resolveServer(server: string | undefined, file?: string): LspServerSpec {
-  const s = (server ?? process.env.TRACE_LSP_SERVER)?.trim();
-  if (s) { const [command, ...args] = s.split(/\s+/); return { command, args }; }
+  const serverOverride = (server ?? process.env.TRACE_LSP_SERVER)?.trim();
+  if (serverOverride) { const [command, ...args] = serverOverride.split(/\s+/); return { command, args }; }
   if (file) return serverForFile(file);
   return defaultTsServer();
 }
@@ -64,46 +65,46 @@ export function resolveServer(server: string | undefined, file?: string): LspSer
  * the JSON-RPC pipe IDEs use, so the tool is a standard LSP client rather than a bespoke analyzer.
  */
 export class LspClient {
-  readonly #child: ChildProcess;
-  readonly #conn: MessageConnection;
+  readonly #childProcess: ChildProcess;
+  readonly #connection: MessageConnection;
 
   constructor(spec: LspServerSpec) {
-    this.#child = spawn(spec.command, spec.args, { stdio: ["pipe", "pipe", "pipe"] });
-    this.#child.on("error", (e) => log.error("server spawn failed", { command: spec.command, err: String(e) }));
-    this.#child.stderr?.on("data", (d) => log.debug("server stderr", { msg: String(d).trim().slice(0, 300) }));
+    this.#childProcess = spawn(spec.command, spec.args, { stdio: ["pipe", "pipe", "pipe"] });
+    this.#childProcess.on("error", (error) => log.error("server spawn failed", { code: Code.LSP, command: spec.command, err: String(error) }));
+    this.#childProcess.stderr?.on("data", (data) => log.debug("server stderr", { msg: String(data).trim().slice(0, 300) }));
     // Swallow stray pipe errors (EPIPE / write-after-destroy during teardown) so they never surface as
     // unhandled events — the connection lifecycle, not the raw socket, is the source of truth.
-    this.#child.stdin?.on("error", () => {});
-    this.#child.stdout?.on("error", () => {});
-    this.#conn = createMessageConnection(new StreamMessageReader(this.#child.stdout!), new StreamMessageWriter(this.#child.stdin!));
-    this.#conn.onError(([e]) => log.debug("connection error", { err: String(e) }));
-    this.#conn.listen();
+    this.#childProcess.stdin?.on("error", () => {});
+    this.#childProcess.stdout?.on("error", () => {});
+    this.#connection = createMessageConnection(new StreamMessageReader(this.#childProcess.stdout!), new StreamMessageWriter(this.#childProcess.stdin!));
+    this.#connection.onError(([error]) => log.debug("connection error", { err: String(error) }));
+    this.#connection.listen();
   }
 
   /** Send an LSP request (loosely typed: call sites pass the protocol's typed request constants). */
   request<R>(type: any, params?: any): Promise<R> {
-    return this.#conn.sendRequest(type, params);
+    return this.#connection.sendRequest(type, params);
   }
 
   /** Send an LSP notification. */
   notify(type: any, params?: any): void {
-    void this.#conn.sendNotification(type, params);
+    void this.#connection.sendNotification(type, params);
   }
 
   /** The LSP handshake: `initialize` request → `initialized` notification. Returns the server's capabilities. */
   async initialize(params: InitializeParams): Promise<InitializeResult> {
-    const result = await this.#conn.sendRequest(InitializeRequest.type, params);
-    this.#conn.sendNotification(InitializedNotification.type as any, {});
+    const result = await this.#connection.sendRequest(InitializeRequest.type, params);
+    this.#connection.sendNotification(InitializedNotification.type as any, {});
     return result;
   }
 
   /** Graceful teardown: `shutdown` → `exit` (awaiting the flush so no write is in-flight), then drop the pipe. */
   async dispose(): Promise<void> {
     try {
-      await this.#conn.sendRequest(ShutdownRequest.type);
-      await this.#conn.sendNotification(ExitNotification.type as any); // await the flush before destroying streams
+      await this.#connection.sendRequest(ShutdownRequest.type);
+      await this.#connection.sendNotification(ExitNotification.type as any); // await the flush before destroying streams
     } catch { /* server already gone */ }
-    try { this.#conn.dispose(); } catch { /* noop */ }
-    try { this.#child.kill(); } catch { /* noop */ }
+    try { this.#connection.dispose(); } catch { /* noop */ }
+    try { this.#childProcess.kill(); } catch { /* noop */ }
   }
 }

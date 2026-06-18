@@ -19,13 +19,13 @@ export interface Step { action: StepAction; arg?: string; value?: string; }
  * value may contain `=`). The action is NOT validated here — it may be unknown; `StepInput` is the gate that
  * rejects an action outside {@link STEP_ACTIONS}.
  */
-export function parseStep(raw: string): Step {
-  const colon = raw.indexOf(":");
-  const action = (colon === -1 ? raw : raw.slice(0, colon)).trim() as StepAction;
-  const rest = colon === -1 ? "" : raw.slice(colon + 1);
+export function parseStep(rawStep: string): Step {
+  const colonIndex = rawStep.indexOf(":");
+  const action = (colonIndex === -1 ? rawStep : rawStep.slice(0, colonIndex)).trim() as StepAction;
+  const rest = colonIndex === -1 ? "" : rawStep.slice(colonIndex + 1);
   if (action === "type") {
-    const eq = rest.indexOf("=");
-    return { action, arg: eq === -1 ? rest : rest.slice(0, eq), value: eq === -1 ? "" : rest.slice(eq + 1) };
+    const equalsIndex = rest.indexOf("=");
+    return { action, arg: equalsIndex === -1 ? rest : rest.slice(0, equalsIndex), value: equalsIndex === -1 ? "" : rest.slice(equalsIndex + 1) };
   }
   return rest ? { action, arg: rest } : { action };
 }

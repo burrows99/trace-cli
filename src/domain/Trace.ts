@@ -8,7 +8,7 @@ import { TraceEvent } from "./TraceEvent.js";
 import { Lineage } from "./Lineage.js";
 import { Recording } from "./Recording.js";
 import { Diagnostic } from "./Diagnostic.js";
-import { TargetRef } from "./Target.js";
+import { TargetReference } from "./Target.js";
 
 export class TraceMeta {
   @IsString() at: string;
@@ -50,10 +50,10 @@ export class TraceData {
   @IsOptional() @IsString() finalUrl?: string;
   @IsOptional() @IsString() screenshot?: string;
   @IsOptional() tools?: unknown[];
-  @IsOptional() graph?: unknown;      // `static graph` payload: a call CodeGraph {nodes, edges, …} (see codegraph/)
-  @IsOptional() deps?: unknown;       // `static deps` payload: a module-import Graph (madge) — same Graph $def
-  @IsOptional() symbols?: unknown;    // `static symbols` payload: Symbol[] (tree-sitter) — see schema $defs/Symbol
-  @IsOptional() complexity?: unknown; // `static complexity` payload: Symbol[] with metrics (lizard)
+  @IsOptional() graph?: unknown;      // `graph` payload: a call CodeGraph {nodes, edges, …} (see codegraph/)
+  @IsOptional() deps?: unknown;       // `deps` payload: a module-import Graph (madge) — same Graph $def
+  @IsOptional() symbols?: unknown;    // `symbols` payload: Symbol[] (tree-sitter) — see schema $defs/Symbol
+  @IsOptional() complexity?: unknown; // `complexity` payload: Symbol[] with metrics (lizard)
 
   constructor(init: Partial<TraceData> = {}) { Object.assign(this, init); }
 }
@@ -70,7 +70,7 @@ export class Trace {
   @IsString() command: string;
   @IsBoolean() ok: boolean;
   @ValidateNested() @Type(() => TraceMeta) meta: TraceMeta;
-  @IsOptional() @ValidateNested() @Type(() => TargetRef) target: TargetRef | null;
+  @IsOptional() @ValidateNested() @Type(() => TargetReference) target: TargetReference | null;
   @ValidateNested() @Type(() => TraceData) data: TraceData;
   @IsArray() @ValidateNested({ each: true }) @Type(() => Diagnostic) diagnostics: Diagnostic[];
 
@@ -86,7 +86,7 @@ export class Trace {
     this.ok = init.ok ?? !this.hasErrors();
   }
 
-  hasErrors(): boolean { return this.diagnostics.some((d) => d.level === "error"); }
+  hasErrors(): boolean { return this.diagnostics.some((diagnostic) => diagnostic.level === "error"); }
 
   /** The single serialization point: object graph → wire JSON envelope. */
   toJSON(): Record<string, unknown> {

@@ -8,7 +8,7 @@ import { PostgresSessionStore, createSessionStore } from "../dist/index.js";
 
 const envelope = (sessionId) => ({
   tool: "trace",
-  command: "dynamic.node",
+  command: "run.node",
   ok: true,
   meta: { sessionId, at: new Date().toISOString(), durationMs: 12 },
   target: { kind: "node", source: "app.js", trigger: "curl localhost" },

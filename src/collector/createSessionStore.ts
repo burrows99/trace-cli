@@ -11,11 +11,11 @@ export interface StoreOptions {
  * from explicit `databaseUrl` or env `DATABASE_URL`/`POSTGRES_URL`. There is no file fallback: the collector
  * is database-driven, so a missing connection string is a hard, fail-fast error rather than silent local state.
  */
-export function createSessionStore(opts: StoreOptions = {}): SessionStore {
-  const url = opts.databaseUrl ?? process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+export function createSessionStore(options: StoreOptions = {}): SessionStore {
+  const url = options.databaseUrl ?? process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
   if (!url) {
     throw new Error(
-      "no Postgres connection string — set DATABASE_URL (or POSTGRES_URL), or pass --db.\n" +
+      "no Postgres connection string — set DATABASE_URL (or POSTGRES_URL), or pass --database-url.\n" +
       "  e.g. DATABASE_URL=postgres://user:pass@localhost:5432/trace",
     );
   }

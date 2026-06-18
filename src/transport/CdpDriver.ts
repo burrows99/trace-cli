@@ -8,9 +8,9 @@ import { logger } from "../shared/logger.js";
 
 const cdpLog = logger.child({ component: "cdp" });
 /** Verbose transport trace — debug level, so it's quiet by default and surfaced with TRACE_LOG_LEVEL=debug. */
-export const log = (...a: unknown[]) => cdpLog.debug(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+export const log = (...args: unknown[]) => cdpLog.debug(args.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join(" "));
 
-export interface ScriptInfo { scriptId: string; url?: string; sourceMapURL?: string; [k: string]: unknown; }
+export interface ScriptInfo { scriptId: string; url?: string; sourceMapURL?: string; [key: string]: unknown; }
 
 /**
  * CdpDriver — the Chrome DevTools Protocol transport (Node `--inspect` + Chrome). Wraps the maintained
@@ -24,7 +24,7 @@ export class CdpDriver implements ProtocolDriver {
 
   private constructor(client: any) {
     this.#client = client;
-    client.on(Cdp.Debugger.scriptParsed, (p: ScriptInfo) => { if (p?.url) this.#scripts.set(p.scriptId, p); });
+    client.on(Cdp.Debugger.scriptParsed, (script: ScriptInfo) => { if (script?.url) this.#scripts.set(script.scriptId, script); });
   }
 
   static async connect(wsUrl: string, timeoutMs = DEFAULT_ATTACH_TIMEOUT_MS): Promise<CdpDriver> {
@@ -32,30 +32,30 @@ export class CdpDriver implements ProtocolDriver {
     try {
       client = await withDeadline(CDP({ target: wsUrl, local: true }), timeoutMs, () =>
         `CDP connect to ${wsUrl} did not complete within ${timeoutMs}ms — the port accepts TCP but is not responding as a DevTools endpoint`);
-    } catch (e: any) { throw new Error(`cannot connect to ${wsUrl} — ${e.message}`); }
+    } catch (error: any) { throw new Error(`cannot connect to ${wsUrl} — ${error.message}`); }
     return new CdpDriver(client);
   }
 
   send(method: string, params: Record<string, unknown> = {}): Promise<any> { return this.#client.send(method, params); }
-  on(event: string, cb: (p: any) => void): void { this.#client.on(event, cb); }
+  on(event: string, callback: (params: any) => void): void { this.#client.on(event, callback); }
   close(): void { try { this.#client.close(); } catch { /* ignore */ } }
 
   // --- CDP-specific: the scriptParsed cache feeds source-map resolution ---
-  scriptUrl(id: string): string | undefined { return this.#scripts.get(id)?.url; }
-  script(id: string): ScriptInfo | undefined { return this.#scripts.get(id); }
+  scriptUrl(scriptId: string): string | undefined { return this.#scripts.get(scriptId)?.url; }
+  script(scriptId: string): ScriptInfo | undefined { return this.#scripts.get(scriptId); }
   scripts(): Map<string, ScriptInfo> { return this.#scripts; }
 
   // --- target discovery (custom; environment-specific — libraries can't generalize this) ---
   static async listTargets(port: number, kind: TargetKind, timeoutMs = 4000): Promise<any[]> {
     const route = kind === TargetKind.Chrome ? "json" : "json/list";
-    const where = TARGET_LABEL[kind];
-    let res: Response;
-    try { res = await fetch(`http://localhost:${port}/${route}`, { signal: AbortSignal.timeout(timeoutMs) }); }
-    catch (e: any) {
-      const why = e?.name === "TimeoutError" ? `no HTTP response within ${timeoutMs}ms` : (e?.message || String(e));
-      throw new Error(`cannot reach the ${kind} inspector on :${port} (${why}) — is ${where} listening there?`);
+    const targetLabel = TARGET_LABEL[kind];
+    let response: Response;
+    try { response = await fetch(`http://localhost:${port}/${route}`, { signal: AbortSignal.timeout(timeoutMs) }); }
+    catch (error: any) {
+      const reason = error?.name === "TimeoutError" ? `no HTTP response within ${timeoutMs}ms` : (error?.message || String(error));
+      throw new Error(`cannot reach the ${kind} inspector on :${port} (${reason}) — is ${targetLabel} listening there?`);
     }
-    return (await res.json()) as any[];
+    return (await response.json()) as any[];
   }
 
   /**
@@ -65,28 +65,28 @@ export class CdpDriver implements ProtocolDriver {
    * the raw query string (default `about:blank`, which the first navigation then replaces).
    */
   static async createPageTarget(port: number, url = "about:blank", timeoutMs = 4000): Promise<any> {
-    let res: Response;
-    try { res = await fetch(`http://localhost:${port}/json/new?${url}`, { method: "PUT", signal: AbortSignal.timeout(timeoutMs) }); }
-    catch (e: any) { throw new Error(`cannot open a tab on :${port} (${e?.message || String(e)})`); }
-    if (!res.ok) throw new Error(`Chrome refused to open a tab on :${port} (HTTP ${res.status})`);
-    return await res.json();
+    let response: Response;
+    try { response = await fetch(`http://localhost:${port}/json/new?${url}`, { method: "PUT", signal: AbortSignal.timeout(timeoutMs) }); }
+    catch (error: any) { throw new Error(`cannot open a tab on :${port} (${error?.message || String(error)})`); }
+    if (!response.ok) throw new Error(`Chrome refused to open a tab on :${port} (HTTP ${response.status})`);
+    return await response.json();
   }
 
   static async resolveWsUrl(
     port: number,
-    opts: { kind?: TargetKind; urlMatch?: string; titleMatch?: string } = {},
+    options: { kind?: TargetKind; urlMatch?: string; titleMatch?: string } = {},
   ): Promise<string> {
-    const { kind = TargetKind.Node, urlMatch, titleMatch } = opts;
-    const list = await CdpDriver.listTargets(port, kind);
-    let candidates = Array.isArray(list) ? list : [];
-    if (kind === TargetKind.Chrome) candidates = candidates.filter((t) => t.type === "page" && t.webSocketDebuggerUrl);
-    let t: any;
-    if (urlMatch) t = candidates.find((x) => (x.url || "").includes(urlMatch));
-    if (!t && titleMatch) t = candidates.find((x) => (x.title || "").includes(titleMatch));
-    t = t || candidates.find((x) => x.webSocketDebuggerUrl) || candidates[0];
-    if (!t?.webSocketDebuggerUrl) {
+    const { kind = TargetKind.Node, urlMatch, titleMatch } = options;
+    const targets = await CdpDriver.listTargets(port, kind);
+    let candidates = Array.isArray(targets) ? targets : [];
+    if (kind === TargetKind.Chrome) candidates = candidates.filter((candidate) => candidate.type === "page" && candidate.webSocketDebuggerUrl);
+    let target: any;
+    if (urlMatch) target = candidates.find((candidate) => (candidate.url || "").includes(urlMatch));
+    if (!target && titleMatch) target = candidates.find((candidate) => (candidate.title || "").includes(titleMatch));
+    target = target || candidates.find((candidate) => candidate.webSocketDebuggerUrl) || candidates[0];
+    if (!target?.webSocketDebuggerUrl) {
       throw new Error(`no debuggable target on :${port} — is the ${TARGET_LABEL[kind]} up?`);
     }
-    return t.webSocketDebuggerUrl as string;
+    return target.webSocketDebuggerUrl as string;
   }
 }

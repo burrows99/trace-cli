@@ -43,9 +43,9 @@ main { flex: 1; display: grid; grid-template-columns: 340px 1fr; min-height: 0; 
 .evt { border-bottom: 1px solid var(--border); }
 .evt > .head { display: flex; align-items: center; gap: 10px; padding: 9px 20px; cursor: pointer; }
 .evt > .head:hover { background: var(--panel2); }
-.seq { color: var(--muted); font-family: var(--mono); font-size: 11px; min-width: 26px; }
+.sequence { color: var(--muted); font-family: var(--mono); font-size: 11px; min-width: 26px; }
 .kind { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
-.loc { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.location { font-family: var(--mono); font-size: 12px; color: var(--accent); }
 .label { font-family: var(--mono); font-size: 12px; }
 .t { color: var(--muted); font-size: 11px; margin-left: auto; font-family: var(--mono); }
 .body { padding: 4px 20px 14px 56px; display: none; }

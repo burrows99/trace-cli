@@ -20,24 +20,24 @@ export class ScopeExtractor {
   /** In-scope identifier names at (line1, column0) of `source`. Best-effort: returns [] on a parse failure. */
   static inScopeNames(source: string, line1: number, column0: number): string[] {
     try {
-      const sf = ts.createSourceFile("bp.js", source, ts.ScriptTarget.Latest, /*setParentNodes*/ true);
-      const target = Math.max(0, Math.min(source.length, ts.getPositionOfLineAndCharacter(sf, line1 - 1, column0)));
-      const node = ScopeExtractor.#nodeAt(sf, target);
-      if (!node) return [];
+      const sourceFile = ts.createSourceFile("bp.js", source, ts.ScriptTarget.Latest, /*setParentNodes*/ true);
+      const targetOffset = Math.max(0, Math.min(source.length, ts.getPositionOfLineAndCharacter(sourceFile, line1 - 1, column0)));
+      const targetNode = ScopeExtractor.#nodeAt(sourceFile, targetOffset);
+      if (!targetNode) return [];
       const ancestors = new Set<import("typescript").Node>();
-      for (let n: import("typescript").Node | undefined = node; n; n = n.parent) ancestors.add(n);
+      for (let ancestorNode: import("typescript").Node | undefined = targetNode; ancestorNode; ancestorNode = ancestorNode.parent) ancestors.add(ancestorNode);
 
       const names = new Set<string>();
-      const visit = (n: import("typescript").Node): void => {
+      const visit = (node: import("typescript").Node): void => {
         // A parameter is in scope for its whole function body — include it whenever that function encloses
         // the target, regardless of position.
-        if (ts.isParameter(n) && n.parent && ancestors.has(n.parent)) ScopeExtractor.#collectBindingNames(n.name, names);
-        else if (ScopeExtractor.#isDeclaration(n) && n.getStart(sf) < target && ScopeExtractor.#enclosingScopeInAncestors(n, ancestors)) {
-          ScopeExtractor.#collectDeclNames(n, names);
+        if (ts.isParameter(node) && node.parent && ancestors.has(node.parent)) ScopeExtractor.#collectBindingNames(node.name, names);
+        else if (ScopeExtractor.#isDeclaration(node) && node.getStart(sourceFile) < targetOffset && ScopeExtractor.#enclosingScopeInAncestors(node, ancestors)) {
+          ScopeExtractor.#collectDeclNames(node, names);
         }
-        n.forEachChild(visit);
+        node.forEachChild(visit);
       };
-      visit(sf);
+      visit(sourceFile);
       names.delete("arguments");
       return [...names];
     } catch {
@@ -46,20 +46,20 @@ export class ScopeExtractor {
   }
 
   /** The deepest node whose span contains `pos`. */
-  static #nodeAt(sf: import("typescript").Node, pos: number): import("typescript").Node | null {
+  static #nodeAt(sourceFile: import("typescript").Node, position: number): import("typescript").Node | null {
     let found: import("typescript").Node | null = null;
-    const walk = (n: import("typescript").Node): void => {
-      if (pos >= n.getStart(sf as import("typescript").SourceFile) && pos <= n.getEnd()) {
-        found = n;
-        n.forEachChild(walk);
+    const walk = (node: import("typescript").Node): void => {
+      if (position >= node.getStart(sourceFile as import("typescript").SourceFile) && position <= node.getEnd()) {
+        found = node;
+        node.forEachChild(walk);
       }
     };
-    sf.forEachChild(walk);
+    sourceFile.forEachChild(walk);
     return found;
   }
 
-  static #isDeclaration(n: import("typescript").Node): boolean {
-    return ts.isVariableDeclaration(n) || ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n) || ts.isBindingElement(n) || ts.isCatchClause(n);
+  static #isDeclaration(node: import("typescript").Node): boolean {
+    return ts.isVariableDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isBindingElement(node) || ts.isCatchClause(node);
   }
 
   /**
@@ -68,26 +68,26 @@ export class ScopeExtractor {
    * declarations are excluded (they'd bury the real locals under every top-level import/const/function);
    * this mirrors the old pausing engine, which only surfaced `local`/`block`/`catch` scopes.
    */
-  static #enclosingScopeInAncestors(n: import("typescript").Node, ancestors: Set<import("typescript").Node>): boolean {
-    for (let p: import("typescript").Node | undefined = n.parent; p; p = p.parent) {
-      if (ts.isFunctionLike(p)) return ancestors.has(p);
-      if (ts.isSourceFile(p)) return false; // module/global scope — exclude
+  static #enclosingScopeInAncestors(node: import("typescript").Node, ancestors: Set<import("typescript").Node>): boolean {
+    for (let parent: import("typescript").Node | undefined = node.parent; parent; parent = parent.parent) {
+      if (ts.isFunctionLike(parent)) return ancestors.has(parent);
+      if (ts.isSourceFile(parent)) return false; // module/global scope — exclude
     }
     return false;
   }
 
-  static #collectDeclNames(n: import("typescript").Node, out: Set<string>): void {
-    if (ts.isCatchClause(n)) { if (n.variableDeclaration) ScopeExtractor.#collectBindingNames(n.variableDeclaration.name, out); return; }
-    if ((ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) && n.name) { out.add(n.name.text); return; }
-    if (ts.isVariableDeclaration(n) || ts.isBindingElement(n)) ScopeExtractor.#collectBindingNames(n.name, out);
+  static #collectDeclNames(node: import("typescript").Node, collectedNames: Set<string>): void {
+    if (ts.isCatchClause(node)) { if (node.variableDeclaration) ScopeExtractor.#collectBindingNames(node.variableDeclaration.name, collectedNames); return; }
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) { collectedNames.add(node.name.text); return; }
+    if (ts.isVariableDeclaration(node) || ts.isBindingElement(node)) ScopeExtractor.#collectBindingNames(node.name, collectedNames);
   }
 
   /** Flatten a binding name — a plain identifier, or an object/array destructuring pattern — to leaf names. */
-  static #collectBindingNames(name: import("typescript").BindingName, out: Set<string>): void {
-    if (ts.isIdentifier(name)) { out.add(name.text); return; }
-    for (const el of name.elements) {
-      if (ts.isOmittedExpression(el)) continue;
-      ScopeExtractor.#collectBindingNames(el.name, out);
+  static #collectBindingNames(name: import("typescript").BindingName, collectedNames: Set<string>): void {
+    if (ts.isIdentifier(name)) { collectedNames.add(name.text); return; }
+    for (const element of name.elements) {
+      if (ts.isOmittedExpression(element)) continue;
+      ScopeExtractor.#collectBindingNames(element.name, collectedNames);
     }
   }
 }

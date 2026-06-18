@@ -34,10 +34,10 @@ export abstract class ShellAnalysisCommand<Req extends { args?: Record<string, u
   /** Logger component label, e.g. `"deps"`. */        protected abstract readonly component: string;
 
   /** The tool call for this request: argv, cwd, and any meta.args to record. */
-  protected abstract invocation(req: Req): ToolInvocation;
+  protected abstract invocation(request: Req): ToolInvocation;
 
   /** Normalize a non-fatal run's output into a payload (+ optional diagnostics). Throw on unparseable output. */
-  protected abstract interpret(res: ToolRun, req: Req): AnalysisOutcome;
+  protected abstract interpret(toolRun: ToolRun, request: Req): AnalysisOutcome;
 
   /**
    * Whether a non-zero exit is a hard failure. Default `true` (madge succeeds with exit 0). Tools that exit
@@ -49,29 +49,30 @@ export abstract class ShellAnalysisCommand<Req extends { args?: Record<string, u
     return true;
   }
 
-  async run(req: Req): Promise<Trace> {
+  async run(request: Req): Promise<Trace> {
     const startedAtMs = this.started();
     const diagnostics: Diagnostic[] = [];
     let data = new TraceData({});
-    let args = req.args ?? {};
+    let args = request.args ?? {};
 
     try {
-      const inv = this.invocation(req);
-      if (inv.args) args = inv.args;
-      const res = await runTool(this.tool, inv.argv, { cwd: inv.cwd });
-      const fatal = this.nonZeroIsFailure() ? !res.ok : res.code === null;
+      const toolInvocation = this.invocation(request);
+      if (toolInvocation.args) args = toolInvocation.args;
+      const toolRun = await runTool(this.tool, toolInvocation.argv, { cwd: toolInvocation.cwd });
+      const fatal = this.nonZeroIsFailure() ? !toolRun.ok : toolRun.exitCode === null;
       if (fatal) {
-        const msg = res.error ?? (this.nonZeroIsFailure() ? `${this.tool} exited ${res.code}` : `${this.tool} did not run`);
-        diagnostics.push(Diagnostic.error(this.errorCode, msg));
-        logger.child({ component: this.component }).error(`${this.tool} failed`, { err: res.error });
+        const message = toolRun.error ?? (this.nonZeroIsFailure() ? `${this.tool} exited ${toolRun.exitCode}` : `${this.tool} did not run`);
+        diagnostics.push(Diagnostic.error(this.errorCode, message));
+        // Same code on the log line as the envelope diagnostic, so the two channels join on `errorCode`.
+        logger.child({ component: this.component }).error(`${this.tool} failed`, { code: this.errorCode, err: toolRun.error });
       } else {
-        const out = this.interpret(res, req);
-        if (out.data) data = out.data;
-        if (out.diagnostics?.length) diagnostics.push(...out.diagnostics);
+        const outcome = this.interpret(toolRun, request);
+        if (outcome.data) data = outcome.data;
+        if (outcome.diagnostics?.length) diagnostics.push(...outcome.diagnostics);
       }
-    } catch (e: any) {
+    } catch (error: any) {
       // A throw from invocation/interpret (e.g. unparseable output, unreadable file) → one error diagnostic.
-      diagnostics.push(Diagnostic.error(this.errorCode, String(e?.message ?? e).split("\n")[0]));
+      diagnostics.push(Diagnostic.error(this.errorCode, String(error?.message ?? error).split("\n")[0]));
     }
 
     return this.envelope({ command: this.command, data, diagnostics, args, startedAtMs });

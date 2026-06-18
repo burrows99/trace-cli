@@ -24,13 +24,13 @@ export class GraphView {
    * rather than re-expanded, so the tree terminates on recursion.
    */
   static tree(graph: CodeGraph): string {
-    const byId = new Map<string, GraphNode>(graph.nodes.map((n) => [n.id, n]));
-    const adj = new Map<string, GraphEdge[]>();
-    for (const e of graph.edges) (adj.get(e.from) ?? adj.set(e.from, []).get(e.from)!).push(e);
+    const nodesById = new Map<string, GraphNode>(graph.nodes.map((node) => [node.id, node]));
+    const adjacency = new Map<string, GraphEdge[]>();
+    for (const edge of graph.edges) (adjacency.get(edge.from) ?? adjacency.set(edge.from, []).get(edge.from)!).push(edge);
 
-    const root = byId.get(graph.entry);
-    const head = [
-      `graph — ${root?.label ?? graph.entry}  (${root?.loc.file}:${root?.loc.line})  via ${graph.provider}`,
+    const root = nodesById.get(graph.entry);
+    const headerLines = [
+      `graph — ${root?.label ?? graph.entry}  (${root?.location.file}:${root?.location.line})  via ${graph.provider}`,
       `  ${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
         (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
         (graph.stats.truncated ? " · truncated" : ""),
@@ -41,33 +41,33 @@ export class GraphView {
     const onPath = new Set<string>();
     const emitted = new Set<string>();
 
-    const label = (n: GraphNode, weight?: number): string => {
-      const w = weight && weight > 1 ? ` ×${weight}` : "";
-      if (n.scope !== "local") return `${n.label}  ⊗ ${n.scope}${w}`;
-      return `${n.label}  ${n.loc.file}:${n.loc.line}${w}`;
+    const formatLabel = (node: GraphNode, weight?: number): string => {
+      const weightSuffix = weight && weight > 1 ? ` ×${weight}` : "";
+      if (node.scope !== "local") return `${node.label}  ⊗ ${node.scope}${weightSuffix}`;
+      return `${node.label}  ${node.location.file}:${node.location.line}${weightSuffix}`;
     };
 
     const walk = (id: string, prefix: string, connector: string, weight: number | undefined): void => {
-      const n = byId.get(id);
-      if (!n) return;
-      const cycle = onPath.has(id);
-      const kids = adj.get(id) ?? [];
-      const shared = emitted.has(id) && kids.length > 0;
-      const tag = cycle ? "  ↻ cycle" : shared ? "  → shared" : "";
-      lines.push(`${prefix}${connector}${label(n, weight)}${tag}`);
-      if (cycle || shared) return; // back-edge / already-expanded: reference only, don't recurse
+      const node = nodesById.get(id);
+      if (!node) return;
+      const isCycle = onPath.has(id);
+      const children = adjacency.get(id) ?? [];
+      const isShared = emitted.has(id) && children.length > 0;
+      const tag = isCycle ? "  ↻ cycle" : isShared ? "  → shared" : "";
+      lines.push(`${prefix}${connector}${formatLabel(node, weight)}${tag}`);
+      if (isCycle || isShared) return; // back-edge / already-expanded: reference only, don't recurse
       emitted.add(id);
       onPath.add(id);
       const childPrefix = connector ? prefix + (connector.startsWith("└") ? "   " : "│  ") : prefix;
-      kids.forEach((e, i) => {
-        const last = i === kids.length - 1;
-        walk(e.to, childPrefix, last ? "└─ " : "├─ ", e.weight);
+      children.forEach((childEdge, index) => {
+        const isLast = index === children.length - 1;
+        walk(childEdge.to, childPrefix, isLast ? "└─ " : "├─ ", childEdge.weight);
       });
       onPath.delete(id);
     };
 
     walk(graph.entry, "", "", undefined);
-    return head.concat(lines).join("\n");
+    return headerLines.concat(lines).join("\n");
   }
 
   /**
@@ -82,14 +82,14 @@ export class GraphView {
   static callGraphHtml(trace: Trace): string {
     const graph = trace.data.graph as CodeGraph | undefined;
     if (!graph || !graph.nodes?.length) {
-      const err = trace.diagnostics.find((d) => d.level === "error");
-      const msg = err ? `graph failed: ${err.message}` : "graph — no nodes";
-      return GraphView.htmlDoc("trace-cli graph", `<p class="empty">${GraphView.esc(msg)}</p>`);
+      const errorDiagnostic = trace.diagnostics.find((diagnostic) => diagnostic.level === "error");
+      const message = errorDiagnostic ? `graph failed: ${errorDiagnostic.message}` : "graph — no nodes";
+      return GraphView.htmlDoc("trace-cli graph", `<p class="empty">${GraphView.escapeHtml(message)}</p>`);
     }
 
     // The graph IS the data: no traversal/dedup here — nodes and edges go to the force renderer verbatim. Cycles
     // are just edges that close a loop; a recursive call is a self-edge. Entry is accented, externals are amber.
-    const root = graph.nodes.find((n) => n.id === graph.entry);
+    const root = graph.nodes.find((node) => node.id === graph.entry);
     const stats =
       `${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
       (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
@@ -98,14 +98,14 @@ export class GraphView {
       {
         title: `graph — ${root?.label ?? graph.entry}`,
         h1: root?.label ?? graph.entry,
-        sub: `${root?.loc.file ?? ""}${root?.loc.line ? ":" + root.loc.line : ""} · via ${graph.provider}`,
+        sub: `${root?.location.file ?? ""}${root?.location.line ? ":" + root.location.line : ""} · via ${graph.provider}`,
         stats,
         truncated: graph.stats.truncated ? "graph truncated — raise --depth for more, or pick a more specific entry" : undefined,
       },
       {
         entry: graph.entry,
-        nodes: graph.nodes.map((n) => ({ id: n.id, label: n.label, kind: n.kind, file: n.loc.file, line: n.loc.line, scope: n.scope })),
-        edges: graph.edges.map((e) => ({ from: e.from, to: e.to, weight: e.weight ?? 1 })),
+        nodes: graph.nodes.map((node) => ({ id: node.id, label: node.label, kind: node.kind, file: node.location.file, line: node.location.line, scope: node.scope })),
+        edges: graph.edges.map((edge) => ({ from: edge.from, to: edge.to, weight: edge.weight ?? 1 })),
       },
     );
   }
@@ -117,32 +117,32 @@ export class GraphView {
    * call counts, so every edge has weight 1.
    */
   static depsHtml(trace: Trace): string {
-    const g = trace.data.deps as DepGraph | undefined;
-    if (!g || !g.nodes?.length) {
-      const err = trace.diagnostics.find((d) => d.level === "error");
-      const msg = err ? `deps failed: ${err.message}` : "deps — no modules";
-      return GraphView.htmlDoc("trace-cli deps", `<p class="empty">${GraphView.esc(msg)}</p>`);
+    const depGraph = trace.data.deps as DepGraph | undefined;
+    if (!depGraph || !depGraph.nodes?.length) {
+      const errorDiagnostic = trace.diagnostics.find((diagnostic) => diagnostic.level === "error");
+      const message = errorDiagnostic ? `deps failed: ${errorDiagnostic.message}` : "deps — no modules";
+      return GraphView.htmlDoc("trace-cli deps", `<p class="empty">${GraphView.escapeHtml(message)}</p>`);
     }
-    const stats = `${g.stats.modules} modules · ${g.stats.edges} imports` + (g.stats.circular ? ` · ${g.stats.circular} circular` : "");
+    const stats = `${depGraph.stats.modules} modules · ${depGraph.stats.edges} imports` + (depGraph.stats.circular ? ` · ${depGraph.stats.circular} circular` : "");
     return GraphView.forceGraphDoc(
       {
-        title: `deps — ${g.stats.modules} modules`,
+        title: `deps — ${depGraph.stats.modules} modules`,
         h1: "module graph",
-        sub: `${g.entry ?? ""} · via madge`,
+        sub: `${depGraph.entry ?? ""} · via madge`,
         stats,
       },
       {
-        entry: g.entry ?? "",
+        entry: depGraph.entry ?? "",
         // label = basename for a readable node; full path goes in the hover title (file). All in-repo → "local".
-        nodes: g.nodes.map((n) => ({ id: n.id, label: n.id.split("/").pop() || n.id, kind: "module", file: n.id, line: 0, scope: "local" })),
-        edges: g.edges.map((e) => ({ from: e.from, to: e.to, weight: 1 })),
+        nodes: depGraph.nodes.map((node) => ({ id: node.id, label: node.id.split("/").pop() || node.id, kind: "module", file: node.id, line: 0, scope: "local" })),
+        edges: depGraph.edges.map((edge) => ({ from: edge.from, to: edge.to, weight: 1 })),
       },
     );
   }
 
   /** HTML-escape a value for safe interpolation into page text/attributes. */
-  private static esc(s: unknown): string {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  private static escapeHtml(value: unknown): string {
+    return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   /**
@@ -156,12 +156,12 @@ export class GraphView {
       .replace(/</g, "\\u003c")
       .replace(new RegExp(String.fromCharCode(0x2028), "g"), "\\u2028")
       .replace(new RegExp(String.fromCharCode(0x2029), "g"), "\\u2029");
-    const truncated = meta.truncated ? `<div class="warn">${GraphView.esc(meta.truncated)}</div>` : "";
+    const truncated = meta.truncated ? `<div class="warn">${GraphView.escapeHtml(meta.truncated)}</div>` : "";
     const body =
       `<header>` +
-        `<h1>${GraphView.esc(meta.h1)}</h1>` +
-        `<div class="sub">${GraphView.esc(meta.sub)}</div>` +
-        `<div class="stats">${GraphView.esc(meta.stats)}</div>` +
+        `<h1>${GraphView.escapeHtml(meta.h1)}</h1>` +
+        `<div class="sub">${GraphView.escapeHtml(meta.sub)}</div>` +
+        `<div class="stats">${GraphView.escapeHtml(meta.stats)}</div>` +
         truncated +
       `</header>` +
       `<div class="controls">` +
@@ -186,13 +186,13 @@ export class GraphView {
    * JS this way, while the empty/error page uses neither.
    */
   private static htmlDoc(title: string, body: string, extra?: { style?: string; script?: string }): string {
-    const t = title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const escapedTitle = title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${t}</title>
+<title>${escapedTitle}</title>
 <style>
 ${GraphView.HTML_BASE_CSS}${extra?.style ? "\n" + extra.style : ""}
 </style>
@@ -249,181 +249,181 @@ ${body}${extra?.script ? `\n<script>\n${extra.script}\n</script>` : ""}
    * (string concatenation, no backticks / ${}) so it embeds cleanly inside the document template literal.
    */
   private static readonly GRAPH_JS = `(function () {
-  var DATA = __DATA__;
-  var NS = "http://www.w3.org/2000/svg";
+  var graphData = __DATA__;
+  var svgNamespace = "http://www.w3.org/2000/svg";
   var svg = document.getElementById("graph");
-  var vp = document.getElementById("viewport");
-  var gE = document.getElementById("edges");
-  var gN = document.getElementById("nodes");
+  var viewport = document.getElementById("viewport");
+  var edgesGroup = document.getElementById("edges");
+  var nodesGroup = document.getElementById("nodes");
 
-  var nodes = DATA.nodes.map(function (n) {
-    return { id: n.id, label: n.label, kind: n.kind, file: n.file, line: n.line, scope: n.scope, x: 0, y: 0, vx: 0, vy: 0, deg: 0 };
+  var nodes = graphData.nodes.map(function (node) {
+    return { id: node.id, label: node.label, kind: node.kind, file: node.file, line: node.line, scope: node.scope, x: 0, y: 0, vx: 0, vy: 0, deg: 0 };
   });
-  var idx = new Map(); nodes.forEach(function (n) { idx.set(n.id, n); });
+  var nodesById = new Map(); nodes.forEach(function (node) { nodesById.set(node.id, node); });
   var edges = [];
-  DATA.edges.forEach(function (e) {
-    var s = idx.get(e.from), t = idx.get(e.to);
-    if (!s || !t) return;
-    edges.push({ source: s, target: t, weight: e.weight || 1, self: s === t });
-    s.deg++; t.deg++;
+  graphData.edges.forEach(function (edge) {
+    var sourceNode = nodesById.get(edge.from), targetNode = nodesById.get(edge.to);
+    if (!sourceNode || !targetNode) return;
+    edges.push({ source: sourceNode, target: targetNode, weight: edge.weight || 1, self: sourceNode === targetNode });
+    sourceNode.deg++; targetNode.deg++;
   });
-  var nbr = new Map(); nodes.forEach(function (n) { nbr.set(n.id, new Set()); });
-  edges.forEach(function (e) { nbr.get(e.source.id).add(e.target.id); nbr.get(e.target.id).add(e.source.id); });
+  var neighbors = new Map(); nodes.forEach(function (node) { neighbors.set(node.id, new Set()); });
+  edges.forEach(function (edge) { neighbors.get(edge.source.id).add(edge.target.id); neighbors.get(edge.target.id).add(edge.source.id); });
 
-  var N = nodes.length;
+  var nodeCount = nodes.length;
   // Deterministic golden-angle spiral seed so the first frame is already spread out (no Math.random clump).
-  nodes.forEach(function (n, i) {
-    var a = i * 2.399963, r = 30 + 26 * Math.sqrt(i + 1);
-    n.x = Math.cos(a) * r; n.y = Math.sin(a) * r;
+  nodes.forEach(function (node, index) {
+    var angle = index * 2.399963, radius = 30 + 26 * Math.sqrt(index + 1);
+    node.x = Math.cos(angle) * radius; node.y = Math.sin(angle) * radius;
   });
-  var entry = idx.get(DATA.entry); if (entry) { entry.x = 0; entry.y = 0; }
+  var entryNode = nodesById.get(graphData.entry); if (entryNode) { entryNode.x = 0; entryNode.y = 0; }
 
-  function rOf(n) { return 6 + Math.min(Math.sqrt(n.deg) * 2.4, 14); }
+  function radiusOf(node) { return 6 + Math.min(Math.sqrt(node.deg) * 2.4, 14); }
 
-  edges.forEach(function (e) {
-    var el = document.createElementNS(NS, e.self ? "path" : "line");
-    el.setAttribute("class", "edge" + (e.weight > 1 ? " heavy" : ""));
-    el.setAttribute("marker-end", "url(#arrow)");
-    el.style.strokeWidth = Math.min(1 + (e.weight - 1) * 0.7, 4.5);
-    gE.appendChild(el); e.el = el;
+  edges.forEach(function (edge) {
+    var element = document.createElementNS(svgNamespace, edge.self ? "path" : "line");
+    element.setAttribute("class", "edge" + (edge.weight > 1 ? " heavy" : ""));
+    element.setAttribute("marker-end", "url(#arrow)");
+    element.style.strokeWidth = Math.min(1 + (edge.weight - 1) * 0.7, 4.5);
+    edgesGroup.appendChild(element); edge.el = element;
   });
-  nodes.forEach(function (n) {
-    n.r = rOf(n);
-    var g = document.createElementNS(NS, "g");
-    g.setAttribute("class", "node" + (n.id === DATA.entry ? " entry" : "") + (n.scope !== "local" ? " ext" : ""));
-    var c = document.createElementNS(NS, "circle"); c.setAttribute("r", n.r);
-    var tx = document.createElementNS(NS, "text"); tx.setAttribute("x", n.r + 4); tx.setAttribute("y", 4); tx.textContent = n.label;
-    var ti = document.createElementNS(NS, "title");
-    var meta = n.scope === "local" ? (n.file ? ("  " + n.file + (n.line ? ":" + n.line : "")) : "") : ("  external: " + n.scope);
-    ti.textContent = n.label + meta;
-    g.appendChild(c); g.appendChild(tx); g.appendChild(ti);
-    gN.appendChild(g); n.el = g;
-    g.addEventListener("pointerdown", function (ev) { startDrag(ev, n); });
-    g.addEventListener("mouseenter", function () { focus(n); });
-    g.addEventListener("mouseleave", unfocus);
+  nodes.forEach(function (node) {
+    node.r = radiusOf(node);
+    var group = document.createElementNS(svgNamespace, "g");
+    group.setAttribute("class", "node" + (node.id === graphData.entry ? " entry" : "") + (node.scope !== "local" ? " ext" : ""));
+    var circle = document.createElementNS(svgNamespace, "circle"); circle.setAttribute("r", node.r);
+    var textNode = document.createElementNS(svgNamespace, "text"); textNode.setAttribute("x", node.r + 4); textNode.setAttribute("y", 4); textNode.textContent = node.label;
+    var titleNode = document.createElementNS(svgNamespace, "title");
+    var metaText = node.scope === "local" ? (node.file ? ("  " + node.file + (node.line ? ":" + node.line : "")) : "") : ("  external: " + node.scope);
+    titleNode.textContent = node.label + metaText;
+    group.appendChild(circle); group.appendChild(textNode); group.appendChild(titleNode);
+    nodesGroup.appendChild(group); node.el = group;
+    group.addEventListener("pointerdown", function (event) { startDrag(event, node); });
+    group.addEventListener("mouseenter", function () { focus(node); });
+    group.addEventListener("mouseleave", unfocus);
   });
 
   // --- cooling force simulation ---
   var alpha = 1, REP = 4200, LINK = 78, LINKK = 0.04, DIR = 0.06, CENTER = 0.012;
-  var decay = N > 500 ? 0.965 : 0.99;
+  var decay = nodeCount > 500 ? 0.965 : 0.99;
   function tick() {
-    var i, j, a, b, dx, dy, d2, d, f, ux, uy;
-    for (i = 0; i < N; i++) {
-      a = nodes[i];
-      for (j = i + 1; j < N; j++) {
-        b = nodes[j];
-        dx = a.x - b.x; dy = a.y - b.y; d2 = dx * dx + dy * dy;
-        if (d2 < 0.01) { dx = ((i * 13 + 7) % 17) - 8; dy = ((j * 7 + 3) % 17) - 8; d2 = dx * dx + dy * dy + 0.01; }
-        d = Math.sqrt(d2); f = (REP / d2) * alpha; ux = dx / d; uy = dy / d;
-        a.vx += f * ux; a.vy += f * uy; b.vx -= f * ux; b.vy -= f * uy;
+    var indexA, indexB, nodeA, nodeB, deltaX, deltaY, distanceSquared, distance, force, unitX, unitY;
+    for (indexA = 0; indexA < nodeCount; indexA++) {
+      nodeA = nodes[indexA];
+      for (indexB = indexA + 1; indexB < nodeCount; indexB++) {
+        nodeB = nodes[indexB];
+        deltaX = nodeA.x - nodeB.x; deltaY = nodeA.y - nodeB.y; distanceSquared = deltaX * deltaX + deltaY * deltaY;
+        if (distanceSquared < 0.01) { deltaX = ((indexA * 13 + 7) % 17) - 8; deltaY = ((indexB * 7 + 3) % 17) - 8; distanceSquared = deltaX * deltaX + deltaY * deltaY + 0.01; }
+        distance = Math.sqrt(distanceSquared); force = (REP / distanceSquared) * alpha; unitX = deltaX / distance; unitY = deltaY / distance;
+        nodeA.vx += force * unitX; nodeA.vy += force * unitY; nodeB.vx -= force * unitX; nodeB.vy -= force * unitY;
       }
     }
-    for (var k = 0; k < edges.length; k++) {
-      var e = edges[k]; if (e.self) continue;
-      dx = e.target.x - e.source.x; dy = e.target.y - e.source.y; d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      f = (d - LINK) * LINKK; ux = dx / d; uy = dy / d;
-      e.source.vx += f * ux; e.source.vy += f * uy; e.target.vx -= f * ux; e.target.vy -= f * uy;
-      var sep = (LINK - (e.target.y - e.source.y)) * DIR; e.target.vy += sep; e.source.vy -= sep; // callee below caller
+    for (var edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
+      var edge = edges[edgeIndex]; if (edge.self) continue;
+      deltaX = edge.target.x - edge.source.x; deltaY = edge.target.y - edge.source.y; distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY) || 0.01;
+      force = (distance - LINK) * LINKK; unitX = deltaX / distance; unitY = deltaY / distance;
+      edge.source.vx += force * unitX; edge.source.vy += force * unitY; edge.target.vx -= force * unitX; edge.target.vy -= force * unitY;
+      var separation = (LINK - (edge.target.y - edge.source.y)) * DIR; edge.target.vy += separation; edge.source.vy -= separation; // callee below caller
     }
-    for (i = 0; i < N; i++) { a = nodes[i]; a.vx -= a.x * CENTER; a.vy -= a.y * CENTER; }
-    for (i = 0; i < N; i++) {
-      a = nodes[i];
-      if (a.fixed) { a.vx = 0; a.vy = 0; continue; }
-      a.vx *= 0.84; a.vy *= 0.84;
-      var sp = Math.sqrt(a.vx * a.vx + a.vy * a.vy); if (sp > 30) { a.vx = a.vx / sp * 30; a.vy = a.vy / sp * 30; }
-      a.x += a.vx; a.y += a.vy;
+    for (indexA = 0; indexA < nodeCount; indexA++) { nodeA = nodes[indexA]; nodeA.vx -= nodeA.x * CENTER; nodeA.vy -= nodeA.y * CENTER; }
+    for (indexA = 0; indexA < nodeCount; indexA++) {
+      nodeA = nodes[indexA];
+      if (nodeA.fixed) { nodeA.vx = 0; nodeA.vy = 0; continue; }
+      nodeA.vx *= 0.84; nodeA.vy *= 0.84;
+      var speed = Math.sqrt(nodeA.vx * nodeA.vx + nodeA.vy * nodeA.vy); if (speed > 30) { nodeA.vx = nodeA.vx / speed * 30; nodeA.vy = nodeA.vy / speed * 30; }
+      nodeA.x += nodeA.vx; nodeA.y += nodeA.vy;
     }
     alpha *= decay;
   }
 
   function draw() {
-    for (var k = 0; k < edges.length; k++) {
-      var e = edges[k];
-      if (e.self) {
-        var n = e.source, r = n.r;
-        e.el.setAttribute("d", "M " + (n.x - r * 0.6) + " " + (n.y - r * 0.8) + " C " + (n.x - r * 3.2) + " " + (n.y - r * 4) + ", " + (n.x + r * 3.2) + " " + (n.y - r * 4) + ", " + (n.x + r * 0.6) + " " + (n.y - r * 0.8));
+    for (var edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
+      var edge = edges[edgeIndex];
+      if (edge.self) {
+        var node = edge.source, radius = node.r;
+        edge.el.setAttribute("d", "M " + (node.x - radius * 0.6) + " " + (node.y - radius * 0.8) + " C " + (node.x - radius * 3.2) + " " + (node.y - radius * 4) + ", " + (node.x + radius * 3.2) + " " + (node.y - radius * 4) + ", " + (node.x + radius * 0.6) + " " + (node.y - radius * 0.8));
       } else {
-        var dx = e.target.x - e.source.x, dy = e.target.y - e.source.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
-        var sx = e.source.x + dx / d * e.source.r, sy = e.source.y + dy / d * e.source.r;
-        var tx = e.target.x - dx / d * (e.target.r + 6), ty = e.target.y - dy / d * (e.target.r + 6);
-        e.el.setAttribute("x1", sx); e.el.setAttribute("y1", sy); e.el.setAttribute("x2", tx); e.el.setAttribute("y2", ty);
+        var deltaX = edge.target.x - edge.source.x, deltaY = edge.target.y - edge.source.y, distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY) || 1;
+        var startX = edge.source.x + deltaX / distance * edge.source.r, startY = edge.source.y + deltaY / distance * edge.source.r;
+        var endX = edge.target.x - deltaX / distance * (edge.target.r + 6), endY = edge.target.y - deltaY / distance * (edge.target.r + 6);
+        edge.el.setAttribute("x1", startX); edge.el.setAttribute("y1", startY); edge.el.setAttribute("x2", endX); edge.el.setAttribute("y2", endY);
       }
     }
-    for (var m = 0; m < N; m++) { var nn = nodes[m]; nn.el.setAttribute("transform", "translate(" + nn.x + "," + nn.y + ")"); }
+    for (var index = 0; index < nodeCount; index++) { var node = nodes[index]; node.el.setAttribute("transform", "translate(" + node.x + "," + node.y + ")"); }
   }
 
   // --- pan / zoom ---
   var view = { x: 0, y: 0, k: 1 };
-  function applyView() { vp.setAttribute("transform", "translate(" + view.x + "," + view.y + ") scale(" + view.k + ")"); }
-  function size() { var r = svg.getBoundingClientRect(); return { w: r.width, h: r.height, left: r.left, top: r.top }; }
+  function applyView() { viewport.setAttribute("transform", "translate(" + view.x + "," + view.y + ") scale(" + view.k + ")"); }
+  function size() { var rect = svg.getBoundingClientRect(); return { w: rect.width, h: rect.height, left: rect.left, top: rect.top }; }
   function fit() {
-    if (!N) return;
-    var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
-    nodes.forEach(function (n) { minx = Math.min(minx, n.x - n.r); miny = Math.min(miny, n.y - n.r); maxx = Math.max(maxx, n.x + n.r); maxy = Math.max(maxy, n.y + n.r); });
-    var s = size(), pad = 70, gw = Math.max(maxx - minx, 1), gh = Math.max(maxy - miny, 1);
-    var k = Math.max(0.1, Math.min((s.w - pad) / gw, (s.h - pad) / gh, 2.2));
-    view.k = k; view.x = s.w / 2 - (minx + maxx) / 2 * k; view.y = s.h / 2 - (miny + maxy) / 2 * k;
+    if (!nodeCount) return;
+    var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    nodes.forEach(function (node) { minX = Math.min(minX, node.x - node.r); minY = Math.min(minY, node.y - node.r); maxX = Math.max(maxX, node.x + node.r); maxY = Math.max(maxY, node.y + node.r); });
+    var viewportSize = size(), padding = 70, graphWidth = Math.max(maxX - minX, 1), graphHeight = Math.max(maxY - minY, 1);
+    var scale = Math.max(0.1, Math.min((viewportSize.w - padding) / graphWidth, (viewportSize.h - padding) / graphHeight, 2.2));
+    view.k = scale; view.x = viewportSize.w / 2 - (minX + maxX) / 2 * scale; view.y = viewportSize.h / 2 - (minY + maxY) / 2 * scale;
     applyView();
   }
 
-  var raf = null, refitOnSettle = true;
+  var animationFrame = null, refitOnSettle = true;
   function loop() {
-    if (alpha > 0.02) { tick(); draw(); raf = requestAnimationFrame(loop); }
-    else { draw(); if (refitOnSettle) { refitOnSettle = false; fit(); } raf = null; }
+    if (alpha > 0.02) { tick(); draw(); animationFrame = requestAnimationFrame(loop); }
+    else { draw(); if (refitOnSettle) { refitOnSettle = false; fit(); } animationFrame = null; }
   }
-  function reheat(a) { alpha = Math.max(alpha, a || 0.6); if (!raf) raf = requestAnimationFrame(loop); }
+  function reheat(targetAlpha) { alpha = Math.max(alpha, targetAlpha || 0.6); if (!animationFrame) animationFrame = requestAnimationFrame(loop); }
 
   // --- interaction ---
-  function screenToGraph(ev) { var s = size(); return { x: (ev.clientX - s.left - view.x) / view.k, y: (ev.clientY - s.top - view.y) / view.k }; }
+  function screenToGraph(event) { var viewportSize = size(); return { x: (event.clientX - viewportSize.left - view.x) / view.k, y: (event.clientY - viewportSize.top - view.y) / view.k }; }
   var drag = null, pan = null;
-  function startDrag(ev, n) { ev.stopPropagation(); ev.preventDefault(); drag = { n: n }; n.fixed = true; svg.setPointerCapture(ev.pointerId); svg.classList.add("grabbing"); }
-  svg.addEventListener("pointerdown", function (ev) {
+  function startDrag(event, node) { event.stopPropagation(); event.preventDefault(); drag = { n: node }; node.fixed = true; svg.setPointerCapture(event.pointerId); svg.classList.add("grabbing"); }
+  svg.addEventListener("pointerdown", function (event) {
     if (drag) return;
-    pan = { px: ev.clientX, py: ev.clientY, ox: view.x, oy: view.y }; svg.setPointerCapture(ev.pointerId); svg.classList.add("grabbing");
+    pan = { px: event.clientX, py: event.clientY, ox: view.x, oy: view.y }; svg.setPointerCapture(event.pointerId); svg.classList.add("grabbing");
   });
-  svg.addEventListener("pointermove", function (ev) {
-    if (drag) { var p = screenToGraph(ev); drag.n.x = p.x; drag.n.y = p.y; drag.n.vx = 0; drag.n.vy = 0; reheat(0.3); draw(); }
-    else if (pan) { view.x = pan.ox + (ev.clientX - pan.px); view.y = pan.oy + (ev.clientY - pan.py); applyView(); }
+  svg.addEventListener("pointermove", function (event) {
+    if (drag) { var point = screenToGraph(event); drag.n.x = point.x; drag.n.y = point.y; drag.n.vx = 0; drag.n.vy = 0; reheat(0.3); draw(); }
+    else if (pan) { view.x = pan.ox + (event.clientX - pan.px); view.y = pan.oy + (event.clientY - pan.py); applyView(); }
   });
   function endPtr() { if (drag) { drag.n.fixed = false; drag = null; } pan = null; svg.classList.remove("grabbing"); }
   svg.addEventListener("pointerup", endPtr);
   svg.addEventListener("pointercancel", endPtr);
-  svg.addEventListener("wheel", function (ev) {
-    ev.preventDefault();
-    var s = size(), mx = ev.clientX - s.left, my = ev.clientY - s.top;
-    var nk = Math.max(0.08, Math.min(view.k * Math.exp(-ev.deltaY * 0.0015), 4));
-    view.x = mx - (mx - view.x) * (nk / view.k); view.y = my - (my - view.y) * (nk / view.k); view.k = nk; applyView();
+  svg.addEventListener("wheel", function (event) {
+    event.preventDefault();
+    var viewportSize = size(), pointerX = event.clientX - viewportSize.left, pointerY = event.clientY - viewportSize.top;
+    var nextScale = Math.max(0.08, Math.min(view.k * Math.exp(-event.deltaY * 0.0015), 4));
+    view.x = pointerX - (pointerX - view.x) * (nextScale / view.k); view.y = pointerY - (pointerY - view.y) * (nextScale / view.k); view.k = nextScale; applyView();
   }, { passive: false });
 
   // --- hover spotlight + name/file filter ---
-  function focus(n) {
+  function focus(node) {
     if (drag || pan) return;
-    var keep = nbr.get(n.id);
-    nodes.forEach(function (m) { var on = (m === n) || keep.has(m.id); m.el.classList.toggle("faded", !on); m.el.classList.toggle("hl", m === n); });
-    edges.forEach(function (e) { var on = (e.source === n || e.target === n); e.el.classList.toggle("faded", !on); e.el.classList.toggle("hl", on); });
+    var neighborIds = neighbors.get(node.id);
+    nodes.forEach(function (other) { var isOn = (other === node) || neighborIds.has(other.id); other.el.classList.toggle("faded", !isOn); other.el.classList.toggle("hl", other === node); });
+    edges.forEach(function (edge) { var isOn = (edge.source === node || edge.target === node); edge.el.classList.toggle("faded", !isOn); edge.el.classList.toggle("hl", isOn); });
   }
-  function unfocus() { nodes.forEach(function (m) { m.el.classList.remove("faded", "hl"); }); edges.forEach(function (e) { e.el.classList.remove("faded", "hl"); }); }
-  function doFilter(q) {
-    q = (q || "").trim().toLowerCase();
-    if (!q) { nodes.forEach(function (n) { n.el.classList.remove("dim", "match"); }); edges.forEach(function (e) { e.el.classList.remove("dim"); }); return; }
+  function unfocus() { nodes.forEach(function (node) { node.el.classList.remove("faded", "hl"); }); edges.forEach(function (edge) { edge.el.classList.remove("faded", "hl"); }); }
+  function doFilter(query) {
+    query = (query || "").trim().toLowerCase();
+    if (!query) { nodes.forEach(function (node) { node.el.classList.remove("dim", "match"); }); edges.forEach(function (edge) { edge.el.classList.remove("dim"); }); return; }
     var matched = new Set();
-    nodes.forEach(function (n) {
-      var hit = (n.label + " " + (n.file || "") + " " + (n.scope || "")).toLowerCase().indexOf(q) >= 0;
-      n.el.classList.toggle("match", hit); n.el.classList.toggle("dim", !hit); if (hit) matched.add(n.id);
+    nodes.forEach(function (node) {
+      var isHit = (node.label + " " + (node.file || "") + " " + (node.scope || "")).toLowerCase().indexOf(query) >= 0;
+      node.el.classList.toggle("match", isHit); node.el.classList.toggle("dim", !isHit); if (isHit) matched.add(node.id);
     });
-    edges.forEach(function (e) { e.el.classList.toggle("dim", !(matched.has(e.source.id) && matched.has(e.target.id))); });
+    edges.forEach(function (edge) { edge.el.classList.toggle("dim", !(matched.has(edge.source.id) && matched.has(edge.target.id))); });
   }
 
   document.getElementById("fit").addEventListener("click", fit);
   document.getElementById("relayout").addEventListener("click", function () { refitOnSettle = true; reheat(1); });
   var frozen = false;
-  document.getElementById("freeze").addEventListener("click", function (ev) {
-    frozen = !frozen; ev.target.textContent = frozen ? "resume" : "freeze";
+  document.getElementById("freeze").addEventListener("click", function (event) {
+    frozen = !frozen; event.target.textContent = frozen ? "resume" : "freeze";
     if (frozen) { alpha = 0; } else { reheat(0.4); }
   });
-  document.getElementById("filter").addEventListener("input", function (ev) { doFilter(ev.target.value); });
+  document.getElementById("filter").addEventListener("input", function (event) { doFilter(event.target.value); });
 
-  var s0 = size(); view.x = s0.w / 2; view.y = s0.h / 2; applyView();
+  var initialSize = size(); view.x = initialSize.w / 2; view.y = initialSize.h / 2; applyView();
   reheat(1);
 })();`;
 }

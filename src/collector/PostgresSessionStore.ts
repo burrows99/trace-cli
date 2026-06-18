@@ -1,6 +1,7 @@
 import pg from "pg";
 import { type SessionStore, type SessionSummary, type EnvelopePlain, summarize } from "./SessionStore.js";
 import { logger } from "../shared/logger.js";
+import { Code } from "../shared/codes.js";
 
 const { Pool } = pg;
 const log = logger.child({ component: "postgres" });
@@ -18,7 +19,7 @@ const log = logger.child({ component: "postgres" });
 export class PostgresSessionStore implements SessionStore {
   #pool: pg.Pool;
   #table: string;
-  #subscribers = new Set<(s: SessionSummary) => void>();
+  #subscribers = new Set<(summary: SessionSummary) => void>();
   #ready: Promise<void> | null = null;
 
   constructor(connectionString: string, table = "trace_sessions") {
@@ -27,7 +28,7 @@ export class PostgresSessionStore implements SessionStore {
     this.#table = table;
     this.#pool = new Pool({ connectionString });
     // Surface pool-level errors instead of crashing the process on an idle-client disconnect.
-    this.#pool.on("error", (e) => log.error("pool error", { table: this.#table, err: e }));
+    this.#pool.on("error", (error) => log.error("pool error", { code: Code.STORE, table: this.#table, err: error }));
   }
 
   /** Create the table + index once; every data method awaits this first. */
@@ -44,25 +45,25 @@ export class PostgresSessionStore implements SessionStore {
     ).then(() => log.debug("schema ready", { table: this.#table })));
   }
 
-  async ingest(env: EnvelopePlain): Promise<SessionSummary | null> {
-    const s = summarize(env);
-    if (!s.sessionId) return null;
+  async ingest(envelope: EnvelopePlain): Promise<SessionSummary | null> {
+    const summary = summarize(envelope);
+    if (!summary.sessionId) return null;
     await this.#init();
     await this.#pool.query(
       `INSERT INTO ${this.#table} (session_id, envelope, summary, at)
        VALUES ($1, $2::jsonb, $3::jsonb, $4)
        ON CONFLICT (session_id) DO UPDATE
          SET envelope = EXCLUDED.envelope, summary = EXCLUDED.summary, at = EXCLUDED.at, ingested_at = now()`,
-      [s.sessionId, JSON.stringify(env), JSON.stringify(s), s.at],
+      [summary.sessionId, JSON.stringify(envelope), JSON.stringify(summary), summary.at],
     );
-    for (const fn of this.#subscribers) { try { fn(s); } catch { /* dead subscriber */ } }
-    return s;
+    for (const subscriber of this.#subscribers) { try { subscriber(summary); } catch { /* dead subscriber */ } }
+    return summary;
   }
 
   async list(): Promise<SessionSummary[]> {
     await this.#init();
     const { rows } = await this.#pool.query(`SELECT summary FROM ${this.#table} ORDER BY at DESC NULLS LAST`);
-    return rows.map((r) => r.summary as SessionSummary);
+    return rows.map((row) => row.summary as SessionSummary);
   }
 
   async get(id: string): Promise<EnvelopePlain | null> {
@@ -71,7 +72,7 @@ export class PostgresSessionStore implements SessionStore {
     return rows[0]?.envelope ?? null;
   }
 
-  subscribe(fn: (s: SessionSummary) => void): () => void { this.#subscribers.add(fn); return () => this.#subscribers.delete(fn); }
+  subscribe(callback: (summary: SessionSummary) => void): () => void { this.#subscribers.add(callback); return () => this.#subscribers.delete(callback); }
 
   async clear(): Promise<void> {
     await this.#init();

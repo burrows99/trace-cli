@@ -10,9 +10,10 @@ import { LineageAnalyzer } from "../../analysis/LineageAnalyzer.js";
 import { Trace, TraceData, CurlResponse } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
 import { Recording } from "../../domain/Recording.js";
-import { TargetKind, TargetRef } from "../../domain/Target.js";
+import { TargetKind, TargetReference } from "../../domain/Target.js";
 import type { ArtifactStore } from "../../storage/ArtifactStore.js";
 import { logger } from "../../shared/logger.js";
+import { Code } from "../../shared/codes.js";
 import { TraceCommand } from "./TraceCommand.js";
 
 const log = logger.child({ component: "dynamic" });
@@ -49,34 +50,34 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     super();
   }
 
-  async run(req: DynamicRequest): Promise<DynamicResult> {
+  async run(request: DynamicRequest): Promise<DynamicResult> {
     const startedAtMs = this.started();
-    const sessionId = req.sessionId ?? randomUUID();
-    const isChrome = req.target === TargetKind.Chrome;
+    const sessionId = request.sessionId ?? randomUUID();
+    const isChrome = request.target === TargetKind.Chrome;
     // Provisional trigger for the running envelopes (the final one carries the exact value from the capture):
     // node → the curl; chrome → the first goto: URL, else a step count.
-    const gotoStep = req.steps?.find((s) => s.startsWith("goto:"))?.slice("goto:".length);
-    const trigger = isChrome ? (gotoStep ?? (req.steps?.length ? `${req.steps.length} steps` : null)) : (req.curl ?? null);
-    const ctx: RunCtx = { sessionId, target: req.target, trigger, args: req.args ?? {}, startedAtMs };
+    const gotoStep = request.steps?.find((step) => step.startsWith("goto:"))?.slice("goto:".length);
+    const trigger = isChrome ? (gotoStep ?? (request.steps?.length ? `${request.steps.length} steps` : null)) : (request.curl ?? null);
+    const context: RunCtx = { sessionId, target: request.target, trigger, args: request.args ?? {}, startedAtMs };
 
     // The session exists in the collector the instant the run begins (0 events), then updates on every hit.
-    req.onProgress?.(this.#runningTrace([], ctx));
+    request.onProgress?.(this.#runningTrace([], context));
 
     // Chrome launch mode (`--chrome` with no port): spawn a throwaway headless Chrome to BE the trace target,
     // then tear it down. Attach mode (`--chrome <port>`) uses the running browser as-is.
     let launched: LaunchedChrome | undefined;
     try {
-      let opts: TraceOptions = {
-        ...req, sessionId,
-        ...(req.onProgress ? { onEvent: (events) => req.onProgress!(this.#runningTrace(events, ctx)) } : {}),
+      let options: TraceOptions = {
+        ...request, sessionId,
+        ...(request.onProgress ? { onEvent: (events) => request.onProgress!(this.#runningTrace(events, context)) } : {}),
       };
-      if (isChrome && req.launch) { launched = await ChromeLauncher.launch(); opts = { ...opts, port: launched.port }; }
+      if (isChrome && request.launch) { launched = await ChromeLauncher.launch(); options = { ...options, port: launched.port }; }
 
       // Both targets go through the engine the same way: one method, one CaptureResult. Chrome layers on the
       // extra it alone supports — the screen + trace-panel recording.
-      const capture = isChrome ? await this.tracer.traceChrome(opts) : await this.tracer.traceNode(opts);
-      const trace = this.#toTrace(capture, { sessionId, args: req.args ?? {}, startedAtMs });
-      if (isChrome) await this.#record(capture, trace, sessionId, req.recordOut);
+      const capture = isChrome ? await this.tracer.traceChrome(options) : await this.tracer.traceNode(options);
+      const trace = this.#toTrace(capture, { sessionId, args: request.args ?? {}, startedAtMs });
+      if (isChrome) await this.#record(capture, trace, sessionId, request.recordOut);
       return { trace, capture };
     } finally {
       launched?.kill();
@@ -87,48 +88,48 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
    * A partial, mid-run envelope: the same shape as the finished trace but flagged `running` and carrying only
    * the events captured so far (lineage/recording/diagnostics are computed once at the end in {@link #toTrace}).
    */
-  #runningTrace(events: CaptureResult["events"], ctx: RunCtx): Trace {
+  #runningTrace(events: CaptureResult["events"], context: RunCtx): Trace {
     return this.envelope({
-      command: `dynamic.${ctx.target}`,
+      command: `run.${context.target}`,
       data: new TraceData({ events }),
       running: true,
-      sessionId: ctx.sessionId,
-      args: ctx.args,
-      startedAtMs: ctx.startedAtMs,
-      target: new TargetRef({ kind: ctx.target, source: "cdp", trigger: ctx.trigger }),
+      sessionId: context.sessionId,
+      args: context.args,
+      startedAtMs: context.startedAtMs,
+      target: new TargetReference({ kind: context.target, source: "cdp", trigger: context.trigger }),
     });
   }
 
-  #toTrace(c: CaptureResult, ctx: { sessionId: string; args: Record<string, unknown>; startedAtMs: number }): Trace {
+  #toTrace(capture: CaptureResult, context: { sessionId: string; args: Record<string, unknown>; startedAtMs: number }): Trace {
     const source = "cdp";
     const diagnostics: Diagnostic[] = [];
-    if (c.fatal) diagnostics.push(Diagnostic.error("ENGINE_FATAL", String(c.fatal).split("\n")[0]));
+    if (capture.fatal) diagnostics.push(Diagnostic.error(Code.ENGINE_FATAL, String(capture.fatal).split("\n")[0]));
     // A failed journey step (selector not found / timed out) flips the envelope's `ok` — same gate the old
     // `journey` command applied to its exit code, now expressed as an error diagnostic.
-    for (const s of c.steps ?? []) if (!s.ok) diagnostics.push(Diagnostic.error("STEP_FAILED", `#${s.seq} ${s.step}${s.note ? " — " + s.note : ""}`));
-    for (const b of c.breakpoints.filter((b) => !b.bound)) {
-      diagnostics.push(Diagnostic.warn("BP_UNBOUND", `${b.file}:${b.line} did not bind${b.note ? " — " + b.note : ""}`));
+    for (const step of capture.steps ?? []) if (!step.ok) diagnostics.push(Diagnostic.error(Code.STEP_FAILED, `#${step.sequence} ${step.step}${step.note ? " — " + step.note : ""}`));
+    for (const breakpoint of capture.breakpoints.filter((breakpoint) => !breakpoint.bound)) {
+      diagnostics.push(Diagnostic.warn(Code.BP_UNBOUND, `${breakpoint.file}:${breakpoint.line} did not bind${breakpoint.note ? " — " + breakpoint.note : ""}`));
     }
-    const lineage = LineageAnalyzer.compute(c.events);
+    const lineage = LineageAnalyzer.compute(capture.events);
     const data = new TraceData({
-      breakpoints: c.breakpoints,
-      events: c.events,
+      breakpoints: capture.breakpoints,
+      events: capture.events,
       ...(lineage.length ? { lineage } : {}),
-      ...(c.response ? { response: new CurlResponse(c.response) } : {}),
-      ...(c.console?.length ? { console: c.console } : {}),
-      ...(c.network?.length ? { network: c.network } : {}),
-      ...(c.finalUrl ? { finalUrl: c.finalUrl } : {}),
-      ...(c.screenshot ? { screenshot: c.screenshot } : {}),
+      ...(capture.response ? { response: new CurlResponse(capture.response) } : {}),
+      ...(capture.console?.length ? { console: capture.console } : {}),
+      ...(capture.network?.length ? { network: capture.network } : {}),
+      ...(capture.finalUrl ? { finalUrl: capture.finalUrl } : {}),
+      ...(capture.screenshot ? { screenshot: capture.screenshot } : {}),
     });
     // `ok` derives from the diagnostics: ENGINE_FATAL or STEP_FAILED (errors) flip it false; BP_UNBOUND (warn) doesn't.
     return this.envelope({
-      command: `dynamic.${c.target}`,
+      command: `run.${capture.target}`,
       data,
       diagnostics,
-      sessionId: ctx.sessionId,
-      args: ctx.args,
-      startedAtMs: ctx.startedAtMs,
-      target: new TargetRef({ kind: c.target, source, trigger: c.trigger }),
+      sessionId: context.sessionId,
+      args: context.args,
+      startedAtMs: context.startedAtMs,
+      target: new TargetReference({ kind: capture.target, source, trigger: capture.trigger }),
     });
   }
 
@@ -138,17 +139,17 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
   }
 
   /** Render the Chrome debug-replay video, upload it (if an ArtifactStore is configured), attach the link. */
-  async #record(capture: CaptureResult, trace: Trace, sessionId: string, out?: string): Promise<void> {
+  async #record(capture: CaptureResult, trace: Trace, sessionId: string, outputPath?: string): Promise<void> {
     try {
-      const path = out ?? join(tmpdir(), `trace-${sessionId}.mp4`);
-      const mp4 = await Recorder.renderJourney(capture.frames ?? [], capture.traced ?? [], path);
-      if (!mp4) { log.warn("no frames captured — nothing to record", { sessionId }); return; }
-      const up = this.artifacts && this.artifacts.isConfigured() ? await this.artifacts.upload(mp4, `recordings/${sessionId}.mp4`, "video/mp4") : null;
-      trace.data.recording = up ? new Recording({ url: up.url, bytes: up.bytes }) : new Recording({ path: mp4 });
-      if (up) log.info("recording uploaded", { sessionId, url: up.url, bytes: up.bytes });
-      else log.info("recording saved locally — set S3_ENDPOINT to upload + get a link", { sessionId, path: mp4 });
-    } catch (e: any) {
-      log.error("recording failed", { sessionId, err: e });
+      const videoOutputPath = outputPath ?? join(tmpdir(), `trace-${sessionId}.mp4`);
+      const videoPath = await Recorder.renderJourney(capture.frames ?? [], capture.traced ?? [], videoOutputPath);
+      if (!videoPath) { log.warn("no frames captured — nothing to record", { code: Code.RECORD_EMPTY, sessionId }); return; }
+      const upload = this.artifacts && this.artifacts.isConfigured() ? await this.artifacts.upload(videoPath, `recordings/${sessionId}.mp4`, "video/mp4") : null;
+      trace.data.recording = upload ? new Recording({ url: upload.url, bytes: upload.bytes }) : new Recording({ path: videoPath });
+      if (upload) log.info("recording uploaded", { sessionId, url: upload.url, bytes: upload.bytes });
+      else log.info("recording saved locally — set S3_ENDPOINT to upload + get a link", { sessionId, path: videoPath });
+    } catch (error: any) {
+      log.error("recording failed", { code: Code.RECORD, sessionId, err: error });
     }
   }
 }

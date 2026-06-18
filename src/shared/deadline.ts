@@ -8,12 +8,12 @@
  * The original `p` keeps its own settle handlers attached, so a late rejection after the deadline fired is
  * already handled (no unhandled-rejection noise) and simply becomes a no-op on the settled outer promise.
  */
-export function withDeadline<T>(p: Promise<T>, ms: number, onTimeout: () => string): Promise<T> {
+export function withDeadline<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new DeadlineError(onTimeout())), ms);
-    p.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
+    const timer = setTimeout(() => reject(new DeadlineError(onTimeout())), timeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
     );
   });
 }

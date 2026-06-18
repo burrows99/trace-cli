@@ -1,4 +1,5 @@
-# Run the trace collector + realtime UI, Postgres (session store), and a local S3 (mock-aws) for recordings:
+# Optional collector stack only: realtime UI/API collector, Postgres (session store), and local S3 (mock-aws) for recordings.
+# The `trace` CLI itself is native-first and should run on the host where debug targets are reachable.
 #   docker compose up --build
 #   open http://localhost:4747          # the trace UI (sessions persisted in Postgres)
 #   open http://localhost:9001          # mock-aws (MinIO) console — minioadmin / minioadmin

@@ -34,7 +34,7 @@ test("lsp provider builds the call graph via LSP call hierarchy, resolving acros
 
 test("cross-file callee carries the right file; recursion is a terminating self-edge", async () => {
   const g = await main();
-  assert.equal(g.nodes.find((n) => n.label === "helperFn").loc.file, "helper.ts");
+  assert.equal(g.nodes.find((n) => n.label === "helperFn").location.file, "helper.ts");
   assert.ok(hasEdge(g, "recur", "recur"), "recur → recur self-edge present");
   assert.equal(g.nodes.filter((n) => n.label === "recur").length, 1, "graph dedupes: one recur node despite the cycle");
 });

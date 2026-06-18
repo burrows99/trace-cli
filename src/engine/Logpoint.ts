@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import type { CdpDriver } from "../transport/CdpDriver.js";
 import type { SourceMaps } from "./SourceMaps.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
-import { Loc } from "../domain/Loc.js";
+import { SourceLocation } from "../domain/SourceLocation.js";
 
 /** Global the logpoint condition calls to ship a captured hit out over CDP (`Runtime.bindingCalled`). */
 export const BINDING_NAME = "__traceCliEmit";
@@ -18,13 +18,13 @@ const SNAP_NAME = "__traceCliSnap";
  */
 export const HELPER_SOURCE = `(function(){
   if (typeof globalThis.${SNAP_NAME} === 'function') return;
-  var MAXSTR = 2000, MAXKEYS = 50, MAXDEPTH = 4, MAXARR = 50;
+  var MAX_STR = 2000, MAX_KEYS = 50, MAX_DEPTH = 4, MAX_ARR = 50;
   function safe(v, d, seen) {
     if (v === null) return null;
     var t = typeof v;
     if (t === 'undefined') return '[undefined]';
     if (t === 'number' || t === 'boolean') return v;
-    if (t === 'string') return v.length > MAXSTR ? v.slice(0, MAXSTR) + '…(' + v.length + ')' : v;
+    if (t === 'string') return v.length > MAX_STR ? v.slice(0, MAX_STR) + '…(' + v.length + ')' : v;
     if (t === 'bigint') return String(v) + 'n';
     if (t === 'symbol') return v.toString();
     if (t === 'function') return '[Function' + (v.name ? ': ' + v.name : '') + ']';
@@ -37,23 +37,23 @@ export const HELPER_SOURCE = `(function(){
     try {
       if (Array.isArray(v)) {
         var a = [];
-        for (var i = 0; i < v.length && i < MAXARR; i++) a.push(safe(v[i], d - 1, seen));
-        if (v.length > MAXARR) a.push('…+' + (v.length - MAXARR));
+        for (var i = 0; i < v.length && i < MAX_ARR; i++) a.push(safe(v[i], d - 1, seen));
+        if (v.length > MAX_ARR) a.push('…+' + (v.length - MAX_ARR));
         return a;
       }
       if (typeof Map !== 'undefined' && v instanceof Map) {
         var m = {}, mk = 0;
-        v.forEach(function (val, key) { if (mk++ < MAXKEYS) m[String(key)] = safe(val, d - 1, seen); });
+        v.forEach(function (val, key) { if (mk++ < MAX_KEYS) m[String(key)] = safe(val, d - 1, seen); });
         m['@type'] = 'Map(' + v.size + ')';
         return m;
       }
       if (typeof Set !== 'undefined' && v instanceof Set) {
-        var s = []; v.forEach(function (val) { if (s.length < MAXARR) s.push(safe(val, d - 1, seen)); });
+        var s = []; v.forEach(function (val) { if (s.length < MAX_ARR) s.push(safe(val, d - 1, seen)); });
         return { '@type': 'Set(' + v.size + ')', values: s };
       }
       var o = {}, k = 0, keys = Object.keys(v);
       for (var j = 0; j < keys.length; j++) {
-        if (k++ >= MAXKEYS) { o['…'] = '+' + (keys.length - MAXKEYS) + ' more'; break; }
+        if (k++ >= MAX_KEYS) { o['…'] = '+' + (keys.length - MAX_KEYS) + ' more'; break; }
         try { o[keys[j]] = safe(v[keys[j]], d - 1, seen); } catch (e) { o[keys[j]] = '⟂'; }
       }
       var ctor = v.constructor && v.constructor.name;
@@ -63,8 +63,8 @@ export const HELPER_SOURCE = `(function(){
   }
   globalThis.${SNAP_NAME} = function (bp, vals, exprs, err) {
     try {
-      var L = {}; for (var n in vals) L[n] = safe(vals[n], MAXDEPTH, []);
-      var E = {}; for (var e in exprs) E[e] = safe(exprs[e], MAXDEPTH, []);
+      var L = {}; for (var n in vals) L[n] = safe(vals[n], MAX_DEPTH, []);
+      var E = {}; for (var e in exprs) E[e] = safe(exprs[e], MAX_DEPTH, []);
       globalThis.${BINDING_NAME}(JSON.stringify({ bp: bp, stack: (err && err.stack) || '', locals: L, exprs: E }));
     } catch (_e) {}
     return false;
@@ -79,14 +79,14 @@ export const HELPER_SOURCE = `(function(){
  * and evaluates to `false`. The `typeof ... === 'function'` guard means that if the helper isn't installed in
  * this context yet, the condition is a silent no-op rather than a throw (again: a throw would pause).
  */
-export function buildCondition(bpKey: string, locals: string[], exprs: string[]): string {
-  const vals = locals.length
-    ? `(function(){var o={};${locals.map((n) => `try{o[${JSON.stringify(n)}]=${n}}catch(_){}`).join("")}return o})()`
+export function buildCondition(breakpointKey: string, locals: string[], exprs: string[]): string {
+  const localsObject = locals.length
+    ? `(function(){var o={};${locals.map((localName) => `try{o[${JSON.stringify(localName)}]=${localName}}catch(_){}`).join("")}return o})()`
     : "{}";
-  const ex = exprs.length
-    ? `(function(){var o={};${exprs.map((e) => `try{o[${JSON.stringify(e)}]=(${e})}catch(_e){o[${JSON.stringify(e)}]="⟂ "+(_e&&_e.message)}`).join("")}return o})()`
+  const expressionsObject = exprs.length
+    ? `(function(){var o={};${exprs.map((expression) => `try{o[${JSON.stringify(expression)}]=(${expression})}catch(_e){o[${JSON.stringify(expression)}]="⟂ "+(_e&&_e.message)}`).join("")}return o})()`
     : "{}";
-  return `(typeof globalThis.${SNAP_NAME}==='function'&&${SNAP_NAME}(${JSON.stringify(bpKey)},${vals},${ex},new Error()),false)`;
+  return `(typeof globalThis.${SNAP_NAME}==='function'&&${SNAP_NAME}(${JSON.stringify(breakpointKey)},${localsObject},${expressionsObject},new Error()),false)`;
 }
 
 interface LogpointPayload { bp: string; stack: string; locals: Record<string, unknown>; exprs: Record<string, unknown>; }
@@ -101,36 +101,36 @@ const FRAME_RE = /^\s*at\s+(?:async\s+)?(?:(.*?)\s+)?\(?([^()\s]+):(\d+):(\d+)\)
  * to source-map, not as CDP `callFrames`.
  */
 export class LogpointCapturer {
-  constructor(private readonly driver: CdpDriver, private readonly sm: SourceMaps, private readonly t0: number, private readonly frames = 6) {}
+  constructor(private readonly driver: CdpDriver, private readonly sourceMaps: SourceMaps, private readonly startTime: number, private readonly frameLimit = 6) {}
 
-  async toEvent(payloadJson: string, seq: number): Promise<TraceEvent | null> {
-    let p: LogpointPayload;
-    try { p = JSON.parse(payloadJson); } catch { return null; }
-    if (!p?.bp) return null;
-    const loc = Loc.parse(p.bp);
-    const stack = await this.#resolveStack(p.stack);
-    const label = stack[0]?.split(" (")[0] || loc?.file || p.bp;
-    const exprKeys = Object.keys(p.exprs ?? {});
+  async toEvent(payloadJson: string, sequence: number): Promise<TraceEvent | null> {
+    let payload: LogpointPayload;
+    try { payload = JSON.parse(payloadJson); } catch { return null; }
+    if (!payload?.bp) return null;
+    const location = SourceLocation.parse(payload.bp);
+    const stack = await this.#resolveStack(payload.stack);
+    const label = stack[0]?.split(" (")[0] || location?.file || payload.bp;
+    const exprKeys = Object.keys(payload.exprs ?? {});
     return new TraceEvent({
-      seq, t: Math.round(performance.now() - this.t0), kind: "breakpoint", source: "cdp",
-      loc, label,
-      attrs: { stack, locals: p.locals ?? {}, ...(exprKeys.length ? { exprs: p.exprs } : {}) },
+      sequence, time: Math.round(performance.now() - this.startTime), kind: "breakpoint", source: "cdp",
+      location, label,
+      attributes: { stack, locals: payload.locals ?? {}, ...(exprKeys.length ? { exprs: payload.exprs } : {}) },
     });
   }
 
   /** Parse `new Error().stack`, drop synthetic/internal frames (the injected condition, node internals), map the rest. */
-  async #resolveStack(raw: string): Promise<string[]> {
-    const out: string[] = [];
-    for (const line of (raw || "").split("\n")) {
-      if (out.length >= this.frames) break;
-      const m = FRAME_RE.exec(line);
-      if (!m) continue;
-      const [, fn, url, ln, col] = m;
-      if (!url || !ln || !col) continue;
-      const loc = await this.sm.frameToSource(url, parseInt(ln, 10), parseInt(col, 10));
-      if (!loc) continue; // synthetic condition-eval frame or a node internal — not user code
-      out.push(`${fn || "(anon)"} (${loc.sourceRel}:${loc.line})`);
+  async #resolveStack(rawStack: string): Promise<string[]> {
+    const frames: string[] = [];
+    for (const line of (rawStack || "").split("\n")) {
+      if (frames.length >= this.frameLimit) break;
+      const frameMatch = FRAME_RE.exec(line);
+      if (!frameMatch) continue;
+      const [, functionName, url, lineNumber, column] = frameMatch;
+      if (!url || !lineNumber || !column) continue;
+      const location = await this.sourceMaps.frameToSource(url, parseInt(lineNumber, 10), parseInt(column, 10));
+      if (!location) continue; // synthetic condition-eval frame or a node internal — not user code
+      frames.push(`${functionName || "(anon)"} (${location.sourceRel}:${location.line})`);
     }
-    return out;
+    return frames;
   }
 }

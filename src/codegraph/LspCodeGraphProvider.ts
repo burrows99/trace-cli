@@ -14,7 +14,7 @@ import {
   type SymbolInformation,
 } from "vscode-languageserver-protocol";
 
-import type { CallGraphOptions, CodeGraph, CodeGraphProvider, EntryRef, GraphEdge, GraphNode, NodeScope, ProviderAvailability } from "./CodeGraphProvider.js";
+import type { CallGraphOptions, CodeGraph, CodeGraphProvider, EntryReference, GraphEdge, GraphNode, NodeScope, ProviderAvailability } from "./CodeGraphProvider.js";
 import { LspClient, resolveServer, defaultTsServer } from "./LspClient.js";
 import { logger } from "../shared/logger.js";
 import { sleep } from "../shared/sleep.js";
@@ -36,21 +36,21 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
     try {
       defaultTsServer();
       return { ok: true, detail: "typescript-language-server (LSP, default)" };
-    } catch (e) {
-      return { ok: false, detail: String(e) };
+    } catch (error) {
+      return { ok: false, detail: String(error) };
     }
   }
 
-  async callGraph(entry: EntryRef, opts: CallGraphOptions): Promise<CodeGraph> {
-    const root = resolve(opts.root);
+  async callGraph(entry: EntryReference, options: CallGraphOptions): Promise<CodeGraph> {
+    const root = resolve(options.root);
     const rootUri = pathToFileURL(root + "/").toString();
     const rootPath = fileURLToPath(rootUri).replace(/\\/g, "/");
-    const absFile = isAbsolute(entry.file) ? entry.file : resolve(root, entry.file);
-    const fileUri = pathToFileURL(absFile).toString();
+    const absoluteFile = isAbsolute(entry.file) ? entry.file : resolve(root, entry.file);
+    const fileUri = pathToFileURL(absoluteFile).toString();
 
-    const client = new LspClient(resolveServer(opts.server, absFile));
+    const client = new LspClient(resolveServer(options.server, absoluteFile));
     try {
-      const init = await client.initialize({
+      const initializeResult = await client.initialize({
         processId: process.pid,
         rootUri,
         workspaceFolders: [{ uri: rootUri, name: "root" }],
@@ -61,7 +61,7 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
           },
         },
       });
-      if (!init.capabilities.callHierarchyProvider) {
+      if (!initializeResult.capabilities.callHierarchyProvider) {
         throw new Error("language server does not support call hierarchy (no callHierarchyProvider capability)");
       }
 
@@ -77,8 +77,8 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
 
       const position = await this.#resolvePosition(client, fileUri, entry);
       if (!position) {
-        const at = entry.symbol ? `symbol "${entry.symbol}"` : `a function on line ${entry.line}`;
-        throw new Error(`could not find ${at} in ${rel(root, absFile)}`);
+        const entryDescription = entry.symbol ? `symbol "${entry.symbol}"` : `a function on line ${entry.line}`;
+        throw new Error(`could not find ${entryDescription} in ${relativePath(root, absoluteFile)}`);
       }
 
       // tsserver may still be loading the project on the first request; retry prepare a few times.
@@ -88,21 +88,21 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
         const prepared = await client.request<CallHierarchyItem[] | null>(CallHierarchyPrepareRequest.type, { textDocument: { uri: fileUri }, position });
         rootItem = prepared?.[0];
       }
-      if (!rootItem) throw new Error(`no callable resolved at ${rel(root, absFile)} — point --entry at a function/method`);
+      if (!rootItem) throw new Error(`no callable resolved at ${relativePath(root, absoluteFile)} — point --entry at a function/method`);
 
       const scopeOf = (uri: string): NodeScope => {
-        const f = fileURLToPath(uri).replace(/\\/g, "/");
-        return f.startsWith(rootPath) && !f.includes("/node_modules/") ? "local" : "external";
+        const filePath = fileURLToPath(uri).replace(/\\/g, "/");
+        return filePath.startsWith(rootPath) && !filePath.includes("/node_modules/") ? "local" : "external";
       };
-      const toNode = (it: CallHierarchyItem): GraphNode => {
-        const file = rel(root, fileURLToPath(it.uri));
-        const start = it.selectionRange.start;
-        const scope = scopeOf(it.uri);
+      const toNode = (item: CallHierarchyItem): GraphNode => {
+        const file = relativePath(root, fileURLToPath(item.uri));
+        const start = item.selectionRange.start;
+        const scope = scopeOf(item.uri);
         const node: GraphNode = {
           id: `${file}:${start.line + 1}:${start.character + 1}`,
-          kind: symbolKindName(it.kind),
-          label: it.name,
-          loc: { file, line: start.line + 1, col: start.character + 1, endLine: it.range.end.line + 1 },
+          kind: symbolKindName(item.kind),
+          label: item.name,
+          location: { file, line: start.line + 1, column: start.character + 1, endLine: item.range.end.line + 1 },
           scope,
         };
         if (scope !== "local") node.external = true;
@@ -117,9 +117,9 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
       const itemOf = new Map<string, CallHierarchyItem>();
       let truncated = false;
 
-      const register = (it: CallHierarchyItem): GraphNode => {
-        const node = toNode(it);
-        if (!nodes.has(node.id)) { nodes.set(node.id, node); itemOf.set(node.id, it); }
+      const register = (item: CallHierarchyItem): GraphNode => {
+        const node = toNode(item);
+        if (!nodes.has(node.id)) { nodes.set(node.id, node); itemOf.set(node.id, item); }
         return nodes.get(node.id)!;
       };
 
@@ -130,21 +130,21 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
         if (expanded.has(id)) continue;
         expanded.add(id);
         const node = nodes.get(id)!;
-        if (node.scope === "external" && !opts.includeExternal) continue; // leaf: don't expand into deps
-        if (depth >= opts.maxDepth) { truncated = true; continue; }
-        if (nodes.size >= opts.maxNodes) { truncated = true; continue; }
+        if (node.scope === "external" && !options.includeExternal) continue; // leaf: don't expand into deps
+        if (depth >= options.maxDepth) { truncated = true; continue; }
+        if (nodes.size >= options.maxNodes) { truncated = true; continue; }
 
         const item = itemOf.get(id)!;
         open(item.uri);
         let outgoing: CallHierarchyOutgoingCall[] | null = null;
-        try { outgoing = await client.request<CallHierarchyOutgoingCall[] | null>(CallHierarchyOutgoingCallsRequest.type, { item }); } catch (e) {
-          log.debug("outgoing calls failed", { id, err: String(e) });
+        try { outgoing = await client.request<CallHierarchyOutgoingCall[] | null>(CallHierarchyOutgoingCallsRequest.type, { item }); } catch (error) {
+          log.debug("outgoing calls failed", { id, err: String(error) });
         }
-        for (const oc of outgoing ?? []) {
-          const child = register(oc.to);
-          const ek = `${id}->${child.id}`;
-          if (!edgeKeys.has(ek)) { edgeKeys.add(ek); edges.push({ from: id, to: child.id, kind: "calls", weight: oc.fromRanges?.length }); }
-          if ((child.scope === "local" || opts.includeExternal) && !expanded.has(child.id)) queue.push({ id: child.id, depth: depth + 1 });
+        for (const outgoingCall of outgoing ?? []) {
+          const child = register(outgoingCall.to);
+          const edgeKey = `${id}->${child.id}`;
+          if (!edgeKeys.has(edgeKey)) { edgeKeys.add(edgeKey); edges.push({ from: id, to: child.id, kind: "calls", weight: outgoingCall.fromRanges?.length }); }
+          if ((child.scope === "local" || options.includeExternal) && !expanded.has(child.id)) queue.push({ id: child.id, depth: depth + 1 });
         }
       }
 
@@ -155,7 +155,7 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
         entry: rootNode.id,
         nodes: nodeList,
         edges,
-        stats: { nodes: nodeList.length, edges: edges.length, maxDepth: opts.maxDepth, truncated, external: nodeList.filter((n) => n.external).length },
+        stats: { nodes: nodeList.length, edges: edges.length, maxDepth: options.maxDepth, truncated, external: nodeList.filter((node) => node.external).length },
       };
       log.info("call graph built", { entry: graph.entry, nodes: graph.stats.nodes, edges: graph.stats.edges, truncated });
       return graph;
@@ -164,16 +164,16 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
     }
   }
 
-  /** Resolve an entry to an LSP position: an explicit line:col is used directly; otherwise via `documentSymbol`. */
-  async #resolvePosition(client: LspClient, fileUri: string, entry: EntryRef): Promise<Position | undefined> {
-    if (entry.line != null && entry.col != null) return { line: entry.line - 1, character: entry.col - 1 };
-    const syms = (await client.request<Array<DocumentSymbol | SymbolInformation> | null>(DocumentSymbolRequest.type, { textDocument: { uri: fileUri } })) ?? [];
+  /** Resolve an entry to an LSP position: an explicit line:column is used directly; otherwise via `documentSymbol`. */
+  async #resolvePosition(client: LspClient, fileUri: string, entry: EntryReference): Promise<Position | undefined> {
+    if (entry.line != null && entry.column != null) return { line: entry.line - 1, character: entry.column - 1 };
+    const symbols = (await client.request<Array<DocumentSymbol | SymbolInformation> | null>(DocumentSymbolRequest.type, { textDocument: { uri: fileUri } })) ?? [];
     if (entry.symbol) {
-      for (const s of walkSymbols(syms)) if (s.name === entry.symbol) return s.pos;
+      for (const symbol of walkSymbols(symbols)) if (symbol.name === entry.symbol) return symbol.pos;
       return undefined;
     }
     if (entry.line != null) {
-      for (const s of walkSymbols(syms)) if (s.pos.line === entry.line - 1) return s.pos;
+      for (const symbol of walkSymbols(symbols)) if (symbol.pos.line === entry.line - 1) return symbol.pos;
       return { line: entry.line - 1, character: 0 }; // fall back to the line start
     }
     return undefined;
@@ -181,20 +181,20 @@ export class LspCodeGraphProvider implements CodeGraphProvider {
 }
 
 /** Walk hierarchical DocumentSymbols (or flat SymbolInformation) yielding each symbol's name + name position. */
-function* walkSymbols(syms: Array<DocumentSymbol | SymbolInformation>): Generator<{ name: string; pos: Position }> {
-  for (const s of syms) {
-    if ("selectionRange" in s) {
-      yield { name: s.name, pos: s.selectionRange.start };
-      if (s.children?.length) yield* walkSymbols(s.children);
+function* walkSymbols(symbols: Array<DocumentSymbol | SymbolInformation>): Generator<{ name: string; pos: Position }> {
+  for (const symbol of symbols) {
+    if ("selectionRange" in symbol) {
+      yield { name: symbol.name, pos: symbol.selectionRange.start };
+      if (symbol.children?.length) yield* walkSymbols(symbol.children);
     } else {
-      yield { name: s.name, pos: s.location.range.start };
+      yield { name: symbol.name, pos: symbol.location.range.start };
     }
   }
 }
 
-function rel(root: string, file: string): string {
-  const r = relative(root, file);
-  return (r.startsWith("..") || isAbsolute(r) ? file : r).replace(/\\/g, "/");
+function relativePath(root: string, file: string): string {
+  const relativized = relative(root, file);
+  return (relativized.startsWith("..") || isAbsolute(relativized) ? file : relativized).replace(/\\/g, "/");
 }
 
 function languageIdFor(uri: string): string {

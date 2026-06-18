@@ -1,4 +1,4 @@
-// Static-analysis suite (`trace static …`). The backing tools (madge/lizard/tree-sitter) aren't assumed
+// Static-analysis suite (`trace graph|deps|complexity|symbols`). The backing tools (madge/lizard/tree-sitter) aren't assumed
 // present, so we unit-test the pure parsers against fixtures and assert the tool-missing path degrades to a
 // well-formed error-diagnostic envelope. Run via `npm test` (builds first).
 import { test } from "node:test";
@@ -24,15 +24,15 @@ test("deps: acyclic graph reports zero circular groups", () => {
 
 test("complexity: lizard CSV → function Symbols with metrics, header skipped", () => {
   const csv = [
-    "NLOC,CCN,token,PARAM,length,location", // header (non-numeric first col) → skipped
+    "NLOC,CCN,token,PARAM,length,location", // header (non-numeric first column) → skipped
     '12,3,80,2,15,"parseThing@10-25@src/a.ts"',
     '40,18,300,4,55,"bigFn@30-90@src/a.ts"',
   ].join("\n");
   const fns = ComplexityCommand.parseCsv(csv);
   assert.equal(fns.length, 2);
   assert.equal(fns[0].name, "parseThing");
-  assert.equal(fns[0].loc.file, "src/a.ts");
-  assert.equal(fns[0].loc.line, 10);
+  assert.equal(fns[0].location.file, "src/a.ts");
+  assert.equal(fns[0].location.line, 10);
   assert.equal(fns[0].metrics.find((m) => m.name === "ccn").value, 3);
   assert.equal(fns[0].metrics.find((m) => m.name === "params").value, 2);
 
@@ -63,7 +63,7 @@ test("symbols: tree-sitter sexp + source → named definitions", () => {
   ].join("\n");
   const syms = SymbolsCommand.parseSexp(sexp, source, "src/a.ts");
   assert.deepEqual(
-    syms.map((s) => `${s.kind} ${s.name} :${s.loc.line}`),
+    syms.map((s) => `${s.kind} ${s.name} :${s.location.line}`),
     ["function alpha :1", "class Beta :4", "method gamma :5"],
   );
 });

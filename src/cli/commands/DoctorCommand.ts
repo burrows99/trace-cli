@@ -4,11 +4,12 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
+import { Code } from "../../shared/codes.js";
 import { TraceCommand } from "./TraceCommand.js";
 
-const pexec = promisify(execFile);
+const execFileAsync = promisify(execFile);
 
-interface ToolDef { name: string; pillar: string; purpose: string; cmd?: string; args?: string[]; chrome?: boolean; s3?: boolean; db?: boolean; mod?: string; }
+interface ToolDef { name: string; pillar: string; purpose: string; cmd?: string; args?: string[]; chrome?: boolean; s3?: boolean; db?: boolean; moduleName?: string; }
 export interface ToolStatus { name: string; pillar: string; purpose: string; present: boolean; version?: string; }
 
 const TOOLS: ToolDef[] = [
@@ -19,7 +20,7 @@ const TOOLS: ToolDef[] = [
   { name: "lizard", pillar: "static", purpose: "static complexity", cmd: "lizard", args: ["--version"] },
   { name: "tree-sitter", pillar: "static", purpose: "static symbols (AST)", cmd: "tree-sitter", args: ["--version"] },
   { name: "madge", pillar: "static", purpose: "static deps (JS/TS)", cmd: "madge", args: ["--version"] },
-  { name: "typescript-language-server", pillar: "static", purpose: "code graph — `trace static graph` default LSP server (wraps tsserver)", mod: "typescript-language-server" },
+  { name: "typescript-language-server", pillar: "static", purpose: "code graph — `trace graph` default LSP server (wraps tsserver)", moduleName: "typescript-language-server" },
   { name: "otel-cli", pillar: "runtime", purpose: "exec spans (OTel)", cmd: "otel-cli", args: ["--version"] },
   { name: "playwright", pillar: "frontend", purpose: "web traces", cmd: "playwright", args: ["--version"] },
   { name: "s3", pillar: "storage", purpose: "upload recordings (S3_ENDPOINT)", s3: true },
@@ -35,66 +36,66 @@ export class DoctorCommand extends TraceCommand {
       "/Applications/Chromium.app/Contents/MacOS/Chromium",
       "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser",
     ];
-    return candidates.find((p) => existsSync(p)) ?? null;
+    return candidates.find((candidatePath) => existsSync(candidatePath)) ?? null;
   }
 
-  async #probe(t: ToolDef): Promise<ToolStatus> {
-    if (t.s3) {
-      const ep = process.env.S3_ENDPOINT || process.env.AWS_S3_ENDPOINT;
-      return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: !!ep, version: ep ?? undefined };
+  async #probe(tool: ToolDef): Promise<ToolStatus> {
+    if (tool.s3) {
+      const endpoint = process.env.S3_ENDPOINT || process.env.AWS_S3_ENDPOINT;
+      return { name: tool.name, pillar: tool.pillar, purpose: tool.purpose, present: !!endpoint, version: endpoint ?? undefined };
     }
-    if (t.db) {
-      const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+    if (tool.db) {
+      const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
       // Redact credentials before surfacing the connection string.
-      const shown = url?.replace(/\/\/[^@/]*@/, "//***@");
-      return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: !!url, version: shown ?? undefined };
+      const redactedUrl = databaseUrl?.replace(/\/\/[^@/]*@/, "//***@");
+      return { name: tool.name, pillar: tool.pillar, purpose: tool.purpose, present: !!databaseUrl, version: redactedUrl ?? undefined };
     }
-    if (t.chrome) {
-      const p = DoctorCommand.chromePath();
-      return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: !!p, version: p ?? undefined };
+    if (tool.chrome) {
+      const chromePath = DoctorCommand.chromePath();
+      return { name: tool.name, pillar: tool.pillar, purpose: tool.purpose, present: !!chromePath, version: chromePath ?? undefined };
     }
-    if (t.mod) {
+    if (tool.moduleName) {
       // A resolved package dependency (the bundled LSP server), not a CLI on PATH — read its package version.
       try {
-        const require = createRequire(import.meta.url);
-        const pkg = require(`${t.mod}/package.json`);
-        return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: true, version: pkg.version ? `${t.mod} ${pkg.version}` : "present" };
+        const requireFromHere = createRequire(import.meta.url);
+        const packageJson = requireFromHere(`${tool.moduleName}/package.json`);
+        return { name: tool.name, pillar: tool.pillar, purpose: tool.purpose, present: true, version: packageJson.version ? `${tool.moduleName} ${packageJson.version}` : "present" };
       } catch {
-        return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: false };
+        return { name: tool.name, pillar: tool.pillar, purpose: tool.purpose, present: false };
       }
     }
     try {
-      const { stdout, stderr } = await pexec(t.cmd!, t.args!, { timeout: 5000 });
+      const { stdout, stderr } = await execFileAsync(tool.cmd!, tool.args!, { timeout: 5000 });
       const version = (stdout || stderr || "").trim().split("\n")[0] || "present";
-      return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: true, version };
+      return { name: tool.name, pillar: tool.pillar, purpose: tool.purpose, present: true, version };
     } catch {
-      return { name: t.name, pillar: t.pillar, purpose: t.purpose, present: false };
+      return { name: tool.name, pillar: tool.pillar, purpose: tool.purpose, present: false };
     }
   }
 
   async run(): Promise<Trace> {
-    const tools = await Promise.all(TOOLS.map((t) => this.#probe(t)));
+    const tools = await Promise.all(TOOLS.map((tool) => this.#probe(tool)));
     const toolVersions: Record<string, string> = {};
-    for (const t of tools) if (t.present && t.version) toolVersions[t.name] = t.version;
-    const diagnostics = tools.filter((t) => !t.present).map((t) => Diagnostic.warn("TOOL_MISSING", `${t.name} not found — ${t.purpose} (pillar: ${t.pillar})`));
+    for (const tool of tools) if (tool.present && tool.version) toolVersions[tool.name] = tool.version;
+    const diagnostics = tools.filter((tool) => !tool.present).map((tool) => Diagnostic.warn(Code.TOOL_MISSING, `${tool.name} not found — ${tool.purpose} (pillar: ${tool.pillar})`));
     // Missing tools are warnings, never errors — doctor itself always succeeds (ok: true).
     return this.envelope({ command: "doctor", ok: true, data: new TraceData({ tools }), diagnostics, toolVersions });
   }
 
   render(trace: Trace): string {
     const tools = (trace.data.tools ?? []) as ToolStatus[];
-    const pillars = [...new Set(tools.map((t) => t.pillar))];
+    const pillars = [...new Set(tools.map((tool) => tool.pillar))];
     const lines = ["trace-cli doctor — backing tools"];
     for (const pillar of pillars) {
       lines.push(`\n  ${pillar}`);
-      for (const t of tools.filter((x) => x.pillar === pillar)) {
-        const mark = t.present ? "✅" : "⚠️ ";
-        const ver = t.present ? (t.version ? `  ${t.version}` : "") : "  (missing)";
-        lines.push(`    ${mark} ${t.name.padEnd(12)}${ver}`);
+      for (const tool of tools.filter((candidateTool) => candidateTool.pillar === pillar)) {
+        const statusMark = tool.present ? "✅" : "⚠️ ";
+        const versionLabel = tool.present ? (tool.version ? `  ${tool.version}` : "") : "  (missing)";
+        lines.push(`    ${statusMark} ${tool.name.padEnd(12)}${versionLabel}`);
       }
     }
-    const missing = tools.filter((t) => !t.present).length;
-    lines.push(`\n  ${tools.length - missing}/${tools.length} present` + (missing ? `, ${missing} missing` : ""));
+    const missingCount = tools.filter((tool) => !tool.present).length;
+    lines.push(`\n  ${tools.length - missingCount}/${tools.length} present` + (missingCount ? `, ${missingCount} missing` : ""));
     return lines.join("\n");
   }
 }

@@ -40,11 +40,11 @@ shell around it, not rewrite it.
 ## 2. Target CLI surface
 
 Root command gains subcommands. The old flat `trace --port/--chrome` interface was removed in 0.3.0 — there is
-no back-compat shim; every trace runs through `trace-cli dynamic --node|--chrome`.
+no back-compat shim; every trace runs through `trace-cli run --node|--chrome`.
 
 ```
-trace dynamic   ...        # today's engine: breakpoints + trigger → hits (Node or Chrome)
-trace static    <kind> ... # deps | complexity | symbols | search   (no execution)
+trace run   ...        # today's engine: breakpoints + trigger → hits (Node or Chrome)
+trace graph|deps|complexity|symbols  # call graph · deps · complexity · symbols   (no execution)
 trace exec      -- <cmd>   # run a command under otel-cli, capture spans
 trace spans     query ...  # query an OTel store (otel-desktop-viewer / DuckDB)
 trace web       -- <pw>    # run a Playwright script with --trace on, normalize trace.zip
@@ -52,9 +52,9 @@ trace correlate ...        # cross-tier frontend↔backend span graph
 trace doctor               # report which backing tools are installed (+ versions)
 trace schema               # print the JSON Schema (the contract)
 
-# REMOVED in 0.3.0 — the flat interface no longer exists. Use `trace-cli dynamic …` instead:
-#   trace-cli dynamic --node 9229   --curl '…' --bp file:line …
-#   trace-cli dynamic --chrome 9222 --url …     --bp file:line …   (Chrome auto-records the replay video)
+# REMOVED in 0.3.0 — the flat interface no longer exists. Use `trace-cli run …` instead:
+#   trace-cli run --node 9229   --curl '…' --breakpoint file:line …
+#   trace-cli run --chrome 9222 --url …     --breakpoint file:line …   (Chrome auto-records the replay video)
 ```
 
 `stdout` = the JSON envelope (or the human render). `stderr` = structured logs
@@ -65,12 +65,12 @@ trace schema               # print the JSON Schema (the contract)
 
 | Subcommand | Backing tool | Native output | Normalized into (§4) |
 |---|---|---|---|
-| `static deps` | `madge` (JS/TS), else `tree-sitter`+`rg` (any lang) | JSON adjacency | `Graph` |
-| `static complexity` | `lizard` | CSV/XML | `Symbol[]` + `Metric[]` |
-| `static symbols` | `tree-sitter` (+ grammar) | AST nodes | `Symbol[]` |
-| `static search` | `ripgrep --json` | JSONL | `Match[]` (`Loc` + text) |
-| `dynamic` (Node) | **our CDP engine** | (already structured) | `Event[]` + `response` |
-| `dynamic` (Chrome) | **our CDP engine** | (already structured) | `Event[]` + `console`/`network` |
+| `deps` | `madge` (JS/TS), else `tree-sitter`+`rg` (any lang) | JSON adjacency | `Graph` |
+| `complexity` | `lizard` | CSV/XML | `Symbol[]` + `Metric[]` |
+| `symbols` | `tree-sitter` (+ grammar) | AST nodes | `Symbol[]` |
+| `search` | `ripgrep --json` | JSONL | `Match[]` (`Loc` + text) |
+| `run` (Node) | **our CDP engine** | (already structured) | `Event[]` + `response` |
+| `run` (Chrome) | **our CDP engine** | (already structured) | `Event[]` + `console`/`network` |
 | `exec` | `otel-cli exec` | OTLP spans | `Event[]` + span `Graph` |
 | `spans query` | `otel-desktop-viewer` DuckDB | rows | `Event[]` |
 | `web` | Playwright `--trace on` | `trace.zip`→`trace.json` | `Event[]` (actions/net/console) |
@@ -183,9 +183,9 @@ recorder/human-render path carries zero migration risk.
 | Phase | Deliverable | Risk |
 |---|---|---|
 | **0 — Contract** | `schema/trace.schema.json` + `envelope.js` + validator + golden fixtures. No behavior change. | low |
-| **1 — `dynamic`** | Move engine → `engine/`; add `trace-cli dynamic` wrapping `traceNode`/`traceChrome`; hard-cut the flat `trace --port/--chrome` interface; update `index.js`, skill, plugin. | low |
+| **1 — `run`** | Move engine → `engine/`; add `trace-cli run` wrapping `traceNode`/`traceChrome`; hard-cut the flat `trace --port/--chrome` interface; update `index.js`, skill, plugin. | low |
 | **2 — `doctor` + adapters scaffold** | `trace doctor`; `adapters/` with `detect()` for each tool; normalize stubs. | low |
-| **3 — Static pillar** | `static search`(rg) → `static complexity`(lizard) → `static symbols`(tree-sitter) → `static deps`(madge/ts). Each small & independent. | low–med |
+| **3 — Static pillar** | `search`(rg) → `complexity`(lizard) → `symbols`(tree-sitter) → `deps`(madge/ts). Each small & independent. | low–med |
 | **4 — Runtime spans** | `trace exec` via `otel-cli`; optional `spans query`. | med |
 | **5 — Frontend web** | `trace web` via Playwright trace.zip parsing. | med (format) |
 | **6 — Correlation** | `trace correlate` — the `traceparent` handshake. | **high** |
@@ -198,7 +198,7 @@ Phases 3–6 are independent; ship in any order or drop any pillar without block
 ## 6. Honest callouts / risks (carried from the design notes + added)
 
 - **No backward compatibility.** 0.3.0 hard-cut the flat `trace --port/--chrome` interface; the plugin + skill
-  ship `trace-cli dynamic` only.
+  ship `trace-cli run` only.
 - **Language-agnostic deps:** `madge` is JS/TS only; `pydeps`/`go-callvis` are per-language. Recommend
   `tree-sitter` + `ripgrep` as the *universal* fallback and treat per-language dep tools as optional adapters.
 - **Playwright `trace.json` is not a stable public API.** Pin the Playwright version, parse behind an adapter
@@ -215,14 +215,14 @@ Phases 3–6 are independent; ship in any order or drop any pillar without block
 ## 7. Open decisions to confirm before Phase 1
 
 1. **Back-compat strategy:** *(resolved)* hard-cut — the flat `trace --port/--chrome` interface was removed in
-   0.3.0; `trace-cli dynamic …` is the only entry point.
+   0.3.0; `trace-cli run …` is the only entry point.
 2. **Backing-tool packaging:** bring-your-own-binary + `doctor` *(recommended, keeps install light &
    language-agnostic)*, vs. `optionalDependencies`, vs. hard `dependencies`?
 3. **v1 pillar scope:** which pillars are in the first milestone? (e.g. Static + keep CDP now; OTel/Playwright/
    correlate later?)
 4. **Schema validation:** ship a real JSON Schema + `ajv` runtime validation in tests *(recommended)*, or a
    documented shape only (no validator dep)?
-5. **Naming:** `trace dynamic` for the CDP engine — or a different verb (`trace run` / `trace debug`)?
+5. **Naming:** *(resolved)* the CDP engine command is `trace run` — chosen over the earlier `dynamic` working name (and `debug`). The four static analyses are top-level too (`trace graph|deps|complexity|symbols`), no `static` parent.
 
 ---
 
@@ -279,8 +279,8 @@ stream to stdout/`--json`; these slot in behind the same schema when scale deman
 - ✅ **Protocol-pluggable engine:** CDP driver (`cdp.js`, Node/Chrome) **over `chrome-remote-interface`** +
   DAP driver (`dap.js`) **over the official `DebugClient`** (Python/debugpy; any DAP adapter). We own
   discovery + RemoteObject/variable rendering; the libraries own the wire. One trigger+capture loop (`trace.js`).
-- ✅ **CLI hard-cut:** `trace dynamic --node|--chrome|--python`, `trace doctor`, `trace schema`. Old flat
-  `trace --port` interface removed (→ `trace dynamic --node`).
+- ✅ **CLI hard-cut:** `trace run --node|--chrome|--python`, `trace doctor`, `trace schema`. Old flat
+  `trace --port` interface removed (→ `trace run --node`).
 - ✅ **Test servers:** `test/servers/{node-api,python-api}` with identical business logic — the SAME trace
   (stack, locals, watched exprs) verified across Node (CDP) and Python (DAP), same envelope shape.
 - ✅ All 15 tests green (`npm test`).
@@ -292,7 +292,7 @@ stream to stdout/`--json`; these slot in behind the same schema when scale deman
 
 **Remaining (the rest of "the full thing"):**
 - ⏳ More DAP languages via the same driver: Go (`dlv dap`), Java (`java-debug`), C/C++/Rust (`lldb-dap`).
-- ⏳ Static pillar: `trace static search|complexity|symbols|deps` (ripgrep present; lizard/tree-sitter/madge).
+- ⏳ Static pillar: `trace search|complexity|symbols|deps` (ripgrep present; lizard/tree-sitter/madge).
 - ⏳ `trace exec` (otel-cli spans; needs Go), `trace web` (Playwright), `trace correlate` (cross-tier).
 - ⏳ Release polish: README, skill, `.claude-plugin` manifests.
 ```

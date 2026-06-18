@@ -39,10 +39,10 @@ export class Screencaster {
     if (this.#active === driver) return;
     if (this.#active) await this.#active.send(Cdp.Page.stopScreencast).catch(() => {});
     if (!this.#wired.has(driver)) {
-      driver.on(Cdp.Page.screencastFrame, (p: any) => {
-        if (this.#active !== driver) { driver.send(Cdp.Page.screencastFrameAck, { sessionId: p.sessionId }).catch(() => {}); return; }
-        this.#frames.push({ data: Buffer.from(p.data, "base64"), t: Date.now() });
-        driver.send(Cdp.Page.screencastFrameAck, { sessionId: p.sessionId }).catch(() => {});
+      driver.on(Cdp.Page.screencastFrame, (payload: any) => {
+        if (this.#active !== driver) { driver.send(Cdp.Page.screencastFrameAck, { sessionId: payload.sessionId }).catch(() => {}); return; }
+        this.#frames.push({ data: Buffer.from(payload.data, "base64"), t: Date.now() });
+        driver.send(Cdp.Page.screencastFrameAck, { sessionId: payload.sessionId }).catch(() => {});
       });
       this.#wired.add(driver);
     }
@@ -62,23 +62,23 @@ export class Screencaster {
   frames(): { data: Buffer; t: number }[] { return this.#frames; }
 
   /** Assemble the captured frames into an mp4 with real per-frame durations. Returns null if nothing was captured. */
-  async render(out: string, opts: { tailSecs?: number } = {}): Promise<string | null> {
+  async render(outputPath: string, options: { tailSecs?: number } = {}): Promise<string | null> {
     if (this.#frames.length < 2) return null;
-    const dir = mkdtempSync(join(tmpdir(), "trace-cast-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "trace-cast-"));
     try {
       const lines: string[] = [];
-      this.#frames.forEach((f, i) => {
-        const file = join(dir, `f${String(i).padStart(5, "0")}.jpg`);
-        writeFileSync(file, f.data);
-        const next = this.#frames[i + 1];
-        const dur = next ? Math.min(2, Math.max(0.03, (next.t - f.t) / 1000)) : (opts.tailSecs ?? 1.5);
-        lines.push(`file '${file}'`, `duration ${dur.toFixed(3)}`);
+      this.#frames.forEach((frame, index) => {
+        const framePath = join(tempDir, `f${String(index).padStart(5, "0")}.jpg`);
+        writeFileSync(framePath, frame.data);
+        const nextFrame = this.#frames[index + 1];
+        const duration = nextFrame ? Math.min(2, Math.max(0.03, (nextFrame.t - frame.t) / 1000)) : (options.tailSecs ?? 1.5);
+        lines.push(`file '${framePath}'`, `duration ${duration.toFixed(3)}`);
       });
-      lines.push(`file '${join(dir, `f${String(this.#frames.length - 1).padStart(5, "0")}.jpg`)}'`); // flush last
-      const listFile = join(dir, FRAMES_LIST_FILE);
+      lines.push(`file '${join(tempDir, `f${String(this.#frames.length - 1).padStart(5, "0")}.jpg`)}'`); // flush last
+      const listFile = join(tempDir, FRAMES_LIST_FILE);
       writeFileSync(listFile, lines.join("\n") + "\n");
-      await ffmpeg([...concatInput(listFile), "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", ...h264Mp4(), out]);
-      return out;
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+      await ffmpeg([...concatInput(listFile), "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", ...h264Mp4(), outputPath]);
+      return outputPath;
+    } finally { rmSync(tempDir, { recursive: true, force: true }); }
   }
 }

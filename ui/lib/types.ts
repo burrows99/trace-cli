@@ -20,7 +20,7 @@ export interface SessionSummary {
   running?: boolean;
 }
 
-export interface Loc {
+export interface SourceLocation {
   file: string;
   line?: number;
 }
@@ -32,17 +32,17 @@ export interface TraceEventAttrs {
 }
 
 export interface TraceEvent {
-  seq: number;
+  sequence: number;
   t?: number | string;
   kind: string;
   label?: string;
   source?: string;
-  loc?: Loc;
-  attrs?: TraceEventAttrs;
+  location?: SourceLocation;
+  attributes?: TraceEventAttrs;
 }
 
 export interface LineagePoint {
-  seq: number;
+  sequence: number;
   value: unknown;
   changed?: boolean;
 }
@@ -87,7 +87,7 @@ export interface TraceData {
   network?: NetworkLine[];
 }
 
-export interface TargetRef {
+export interface TargetReference {
   kind?: string;
   source?: string;
   trigger?: string;
@@ -112,7 +112,7 @@ export interface TraceEnvelope {
   command?: string;
   ok?: boolean;
   meta?: TraceMeta;
-  target?: TargetRef | null;
+  target?: TargetReference | null;
   data?: TraceData;
   diagnostics?: Diagnostic[];
 }

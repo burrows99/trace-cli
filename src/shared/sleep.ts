@@ -1,2 +1,2 @@
-/** sleep — resolve after `ms` milliseconds. */
-export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** sleep — resolve after `milliseconds` milliseconds. */
+export const sleep = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));

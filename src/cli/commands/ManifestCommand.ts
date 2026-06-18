@@ -61,42 +61,42 @@ export class ManifestCommand extends CliCommand<Command, Manifest> {
     return { tool: "trace", version: VERSION, command: this.#command(program) };
   }
 
-  #command(cmd: Command): ManifestCommandNode {
+  #command(command: Command): ManifestCommandNode {
     return {
-      name: cmd.name(),
-      aliases: cmd.aliases(),
-      description: cmd.description(),
-      usage: cmd.usage(),
-      arguments: cmd.registeredArguments.map((a) => this.#argument(a)),
-      options: cmd.options.filter((o) => !o.hidden).map((o) => this.#option(o)),
-      commands: cmd.commands.map((c) => this.#command(c)),
+      name: command.name(),
+      aliases: command.aliases(),
+      description: command.description(),
+      usage: command.usage(),
+      arguments: command.registeredArguments.map((argument) => this.#argument(argument)),
+      options: command.options.filter((option) => !option.hidden).map((option) => this.#option(option)),
+      commands: command.commands.map((subcommand) => this.#command(subcommand)),
     };
   }
 
-  #option(o: Option): ManifestOption {
-    const out: ManifestOption = {
-      flags: o.flags,
-      description: o.description,
-      required: o.required,
-      optional: o.optional,
-      variadic: o.variadic,
-      negate: o.negate,
+  #option(option: Option): ManifestOption {
+    const manifestOption: ManifestOption = {
+      flags: option.flags,
+      description: option.description,
+      required: option.required,
+      optional: option.optional,
+      variadic: option.variadic,
+      negate: option.negate,
     };
-    if (o.defaultValue !== undefined) out.default = o.defaultValue;
-    if (o.argChoices) out.choices = o.argChoices;
-    if (o.envVar) out.envVar = o.envVar;
-    return out;
+    if (option.defaultValue !== undefined) manifestOption.default = option.defaultValue;
+    if (option.argChoices) manifestOption.choices = option.argChoices;
+    if (option.envVar) manifestOption.envVar = option.envVar;
+    return manifestOption;
   }
 
-  #argument(a: Argument): ManifestArgument {
-    const out: ManifestArgument = {
-      name: a.name(),
-      description: a.description,
-      required: a.required,
-      variadic: a.variadic,
+  #argument(argument: Argument): ManifestArgument {
+    const manifestArgument: ManifestArgument = {
+      name: argument.name(),
+      description: argument.description,
+      required: argument.required,
+      variadic: argument.variadic,
     };
-    if (a.defaultValue !== undefined) out.default = a.defaultValue;
-    if (a.argChoices) out.choices = a.argChoices;
-    return out;
+    if (argument.defaultValue !== undefined) manifestArgument.default = argument.defaultValue;
+    if (argument.argChoices) manifestArgument.choices = argument.argChoices;
+    return manifestArgument;
   }
 }

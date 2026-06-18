@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { CdpDriver, log } from "../transport/CdpDriver.js";
 import { Cdp } from "../transport/cdp.js";
 import { SourceMaps } from "./SourceMaps.js";
-import { BpBinder } from "./BpBinder.js";
+import { BreakpointBinder } from "./BreakpointBinder.js";
 import { BreakpointResolver } from "./BreakpointResolver.js";
 import { BINDING_NAME, HELPER_SOURCE, LogpointCapturer } from "./Logpoint.js";
 import { CurlTrigger, type CurlResult } from "./CurlTrigger.js";
@@ -61,19 +61,19 @@ export interface TraceOptions {
 
 /**
  * Tracer — the trigger+capture engine, one method per target, each returning a CaptureResult so the command
- * layer treats targets symmetrically. Breakpoints are armed as **non-pausing logpoints** (see {@link BpBinder}):
+ * layer treats targets symmetrically. Breakpoints are armed as **non-pausing logpoints** (see {@link BreakpointBinder}):
  * a hit ships its captured stack/locals/exprs out through a CDP binding without ever halting the VM, so the
  * traced app runs at full speed and a hot path is no longer capped by per-hit pause cost. `traceNode` binds
  * into a running `--inspect` process and fires one curl; `traceChrome` drives a scripted UI journey across tabs
  * and records it (delegating to JourneyRunner). The binding/binding-capture primitives are shared across both.
  */
 export class Tracer {
-  async #settleScripts(driver: CdpDriver, ms = 1500): Promise<void> {
-    let prev = -1, stable = 0;
-    for (let i = 0; i < ms / 100; i++) {
-      const n = driver.scripts().size;
-      if (n === prev) { if (++stable >= 3) break; } else stable = 0;
-      prev = n;
+  async #settleScripts(driver: CdpDriver, settleMs = 1500): Promise<void> {
+    let previousCount = -1, stablePolls = 0;
+    for (let poll = 0; poll < settleMs / 100; poll++) {
+      const scriptCount = driver.scripts().size;
+      if (scriptCount === previousCount) { if (++stablePolls >= 3) break; } else stablePolls = 0;
+      previousCount = scriptCount;
       await sleep(100);
     }
   }
@@ -86,20 +86,20 @@ export class Tracer {
 
   // ---- Node target -----------------------------------------------------------------------------
 
-  async traceNode(opts: TraceOptions): Promise<CaptureResult> {
+  async traceNode(options: TraceOptions): Promise<CaptureResult> {
     const {
       port = DEFAULT_NODE_PORT, curl, urlMatch, titleMatch, breakpoints = [], root, exprs = [],
       frames = 6, maxHits = 100, attachTimeoutMs = DEFAULT_ATTACH_TIMEOUT_MS, reqTimeoutMs = 60000,
-    } = opts;
+    } = options;
     const result: CaptureResult = { target: TargetKind.Node, trigger: curl ?? null, breakpoints: [], events: [] };
-    const driver = await CdpDriver.connect(opts.wsUrl || (await CdpDriver.resolveWsUrl(port, { kind: TargetKind.Node, urlMatch, titleMatch })), attachTimeoutMs);
-    const sm = new SourceMaps(driver, root);
-    const binder = new BpBinder(BreakpointResolver.resolveAll(breakpoints, root), exprs);
+    const driver = await CdpDriver.connect(options.wsUrl || (await CdpDriver.resolveWsUrl(port, { kind: TargetKind.Node, urlMatch, titleMatch })), attachTimeoutMs);
+    const sourceMaps = new SourceMaps(driver, root);
+    const binder = new BreakpointBinder(BreakpointResolver.resolveAll(breakpoints, root), exprs);
 
-    const t0 = performance.now();
-    const capturer = new LogpointCapturer(driver, sm, t0, frames);
-    const pending: string[] = [];
-    driver.on(Cdp.Runtime.bindingCalled, (e: any) => { if (e?.name === BINDING_NAME) pending.push(e.payload); });
+    const startTime = performance.now();
+    const capturer = new LogpointCapturer(driver, sourceMaps, startTime, frames);
+    const pendingPayloads: string[] = [];
+    driver.on(Cdp.Runtime.bindingCalled, (event: any) => { if (event?.name === BINDING_NAME) pendingPayloads.push(event.payload); });
     // Logpoints never pause; this safety resume keeps a stray `debugger;` in the traced app from hanging the run.
     driver.on(Cdp.Debugger.paused, () => { void driver.send(Cdp.Debugger.resume).catch(() => {}); });
 
@@ -109,38 +109,38 @@ export class Tracer {
       await driver.send(Cdp.Debugger.setPauseOnExceptions, { state: "none" });
       await Tracer.installLogpointHelper(driver);
       await this.#settleScripts(driver);
-      await binder.tryBind(driver, sm);
+      await binder.tryBind(driver, sourceMaps);
 
       let triggerDone = !curl;
       let response: CurlResult | undefined;
       if (curl) {
         log(`fired: ${curl.length > 90 ? curl.slice(0, 90) + "…" : curl}`);
-        void CurlTrigger.run(curl, reqTimeoutMs).then((r) => { response = r; }).finally(() => { triggerDone = true; });
+        void CurlTrigger.run(curl, reqTimeoutMs).then((curlResult) => { response = curlResult; }).finally(() => { triggerDone = true; });
       }
       // Drain: hits are emitted synchronously during request handling, but bindingCalled arrives async — wait
       // for the trigger to settle, then until the payload count goes quiet (or a hard ceiling).
       const deadline = performance.now() + reqTimeoutMs;
-      let quiet = 0, last = -1;
+      let quietPolls = 0, previousPendingCount = -1;
       while (performance.now() < deadline) {
         await sleep(50);
-        const done = triggerDone && pending.length === last;
-        if (done) { if (++quiet >= 3) break; } else quiet = 0;
-        last = pending.length;
+        const drained = triggerDone && pendingPayloads.length === previousPendingCount;
+        if (drained) { if (++quietPolls >= 3) break; } else quietPolls = 0;
+        previousPendingCount = pendingPayloads.length;
       }
       result.response = response;
       // Convert the gathered payloads into events (source-map the stacks), respecting maxHits.
-      for (const payload of pending.slice(0, maxHits)) {
-        const ev = await capturer.toEvent(payload, result.events.length + 1);
-        if (!ev) continue;
-        result.events.push(ev);
-        opts.onEvent?.(result.events);
+      for (const payload of pendingPayloads.slice(0, maxHits)) {
+        const event = await capturer.toEvent(payload, result.events.length + 1);
+        if (!event) continue;
+        result.events.push(event);
+        options.onEvent?.(result.events);
       }
-    } catch (e: any) {
-      result.fatal = String(e?.stack || e?.message || e); log("FATAL", result.fatal.split("\n")[0]);
+    } catch (error: any) {
+      result.fatal = String(error?.stack || error?.message || error); log("FATAL", result.fatal.split("\n")[0]);
     } finally {
       result.breakpoints = binder.report();
-      for (const miss of binder.unbound()) log(`bp ${miss} → not bound (line not on this path / wrong route?)`);
-      driver.close(); sm.dispose();
+      for (const unboundBreakpoint of binder.unbound()) log(`bp ${unboundBreakpoint} → not bound (line not on this path / wrong route?)`);
+      driver.close(); sourceMaps.dispose();
     }
     return result;
   }
@@ -153,33 +153,33 @@ export class Tracer {
    * into a screen + trace-panel replay. Multi-step + tab-following needs JourneyRunner's async, sequential
    * driver; the binding/capture primitives are the same as Node.
    */
-  async traceChrome(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 100, urlMatch } = opts;
-    const parsed = steps.map((s) => JourneyRunner.parseStep(s));
-    const cast = new Screencaster();
-    const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: opts.onEvent };
-    const runner = new JourneyRunner(port, cast, config);
+  async traceChrome(options: TraceOptions): Promise<CaptureResult> {
+    const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 100, urlMatch } = options;
+    const parsedSteps = steps.map((step) => JourneyRunner.parseStep(step));
+    const screencaster = new Screencaster();
+    const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: options.onEvent };
+    const runner = new JourneyRunner(port, screencaster, config);
     let stepResults: StepResult[] = [];
     let fatal: string | undefined;
     try {
       // Arm THE ONE PAUSE (bind-before-first-run, see TabTracer) only when the journey opens by navigating a
       // fresh tab — a leading `goto` — so on-mount code is caught. Attach-then-click flows don't need it.
-      const bindBeforeFirstRun = parsed[0]?.action === "goto";
+      const bindBeforeFirstRun = parsedSteps[0]?.action === "goto";
       await runner.start(urlMatch, bindBeforeFirstRun);
-      stepResults = await runner.run(parsed);
-    } catch (e: any) {
-      fatal = String(e?.message ?? e);
+      stepResults = await runner.run(parsedSteps);
+    } catch (error: any) {
+      fatal = String(error?.message ?? error);
     } finally {
-      await cast.stop().catch(() => {});
+      await screencaster.stop().catch(() => {});
       runner.close();
     }
     return {
       target: TargetKind.Chrome,
-      trigger: parsed.find((s) => s.action === "goto")?.arg ?? `${parsed.length} steps`,
+      trigger: parsedSteps.find((step) => step.action === "goto")?.arg ?? `${parsedSteps.length} steps`,
       breakpoints: runner.breakpoints(),
-      events: runner.traced.map((h) => h.ev),
+      events: runner.traced.map((hit) => hit.ev),
       steps: stepResults,
-      frames: cast.frames(),
+      frames: screencaster.frames(),
       traced: runner.traced,
       ...(runner.finalUrl ? { finalUrl: runner.finalUrl } : {}),
       ...(fatal ? { fatal } : {}),

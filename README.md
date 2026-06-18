@@ -7,13 +7,13 @@ Execution tracer & analyzer — one JSON envelope across breakpoint traces (Node
 
 Point it at a running program, give it breakpoints + a trigger → a full **execution trace** (every hit in order: call stack, locals, watched expressions, timing) as **one JSON envelope**, identical shape across targets.
 
-- **Breakpoints never pause the program.** They're armed as non-pausing *logpoints*: each hit captures its stack, every in-scope local (read statically from the source — no naming needed), and any extra `--expr`, then ships it out without halting the VM. The app runs at full speed, hot paths are cheap, and there's no human-style "stop and wait" — built for an agent that reads the trace and re-aims breakpoints, not a human stepping by hand. (Trade-off: capturing *all* locals automatically needs source the runtime can read by name — perfect for Node and dev-mode frontends; a minified production bundle yields mangled local names, though `--expr` and the stack still work.)
+- **Breakpoints never pause the program.** They're armed as non-pausing *logpoints*: each hit captures its stack, every in-scope local (read statically from the source — no naming needed), and any extra `--expression`, then ships it out without halting the VM. The app runs at full speed, hot paths are cheap, and there's no human-style "stop and wait" — built for an agent that reads the trace and re-aims breakpoints, not a human stepping by hand. (Trade-off: capturing *all* locals automatically needs source the runtime can read by name — perfect for Node and dev-mode frontends; a minified production bundle yields mangled local names, though `--expression` and the stack still work.)
   - *The one exception — "THE ONE PAUSE":* a Chrome run that opens by navigating a fresh tab briefly halts **once, during setup**, to bind a breakpoint before the page's first-run/on-mount code executes (CDP `beforeScriptExecution`). It never halts on a hit and drops itself as soon as binding settles. It lives in `TabTracer` (grep `THE ONE PAUSE`). Removing it loses on-mount capture entirely — measured 3 → 0 hits.
 - Not "a debugger" — **OpenTelemetry for software execution**: every source (debug protocol, span exporter, shell) normalizes to one `Event`; events are the asset. See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ```
-trace-cli dynamic   ← breakpoints + a trigger → a full trace   (Node curl · Chrome scripted journey + video, via CDP)
-trace-cli static    ← code structure without running it: graph (LSP call hierarchy) · deps · complexity · symbols
+trace-cli run       ← breakpoints + a trigger → a full trace   (Node curl · Chrome scripted journey + video, via CDP)
+trace-cli graph|deps|complexity|symbols  ← code structure without running it (graph via LSP call hierarchy · deps · complexity · symbols)
 trace-cli serve     ← collector + realtime UI: show ALL traces live (Langfuse-style)
 trace-cli doctor    ← which backing tools are installed
 trace-cli schema    ← the output JSON Schema (the contract)
@@ -25,6 +25,7 @@ trace-cli schema    ← the output JSON Schema (the contract)
 ## Table of Contents
 
 - [Install](#install)
+- [Native-first runtime model](#native-first-runtime-model)
 - [Usage](#usage)
 - [Realtime UI and Docker](#realtime-ui-and-docker)
 - [Static analysis](#static-analysis)
@@ -45,6 +46,14 @@ trace-cli schema    ← the output JSON Schema (the contract)
 - **As a CLI / library (npm)** — `npm i -g trace-cli` for the global `trace-cli` command, or `npm i trace-cli` to import the classes. Requires **Node ≥ 18**.
 - Check backing tools (chrome, ffmpeg, language servers, …) with `trace-cli doctor`.
 
+## Native-first runtime model
+
+- `trace-cli` is **native-first**. The CLI is meant to run directly on the host where your debug target is reachable.
+- The CLI is fully usable without Docker: `run`, `graph`, `deps`, `complexity`, `symbols`, `doctor`, and `schema` all run natively.
+- `trace-cli serve` is an **optional collector service** for ingest + UI.
+- Docker Compose exists to run supporting services for that collector mode (collector UI/API, Postgres session store, optional S3-compatible object store).
+- Practical rule: run tracing commands natively; use Compose only when you want centralized capture/history/replay UI.
+
 ## Usage
 
 One engine, one protocol driver — **CDP** for the JS family (Node `--inspect` and Chrome).
@@ -53,23 +62,23 @@ One engine, one protocol driver — **CDP** for the JS family (Node `--inspect` 
 
 ```bash
 # Node (CDP): attach to a --inspect port, fire a curl, trace the request
-trace-cli dynamic --node 9229 \
+trace-cli run --node 9229 \
   --curl 'curl -s http://localhost:3000/v1/dashboard' \
-  --bp src/dashboard/dashboard.service.ts:149 \
-  --expr 'user.id'
+  --breakpoint src/dashboard/dashboard.service.ts:149 \
+  --expression 'user.id'
 
 # Chrome (CDP): attach to a --remote-debugging-port and drive a scripted UI journey, recording a screen + trace-panel video
-trace-cli dynamic --chrome 9222 --bp src/pages/Thing.tsx:42 \
+trace-cli run --chrome 9222 --breakpoint src/pages/Thing.tsx:42 \
   --url http://localhost:3000/login --step 'type:#email=me@example.com' --step 'click:text=Sign in'
-# --url alone is the single-navigation shorthand (one goto: step); --out <mp4> sets the recording path
+# --url alone is the single-navigation shorthand (one goto: step); --output <mp4> sets the recording path
 
 # …or omit the port — the CLI launches a throwaway headless Chrome itself, traces, records, and tears it down
-trace-cli dynamic --chrome --url http://localhost:5173/route --bp src/pages/Thing.tsx:42
+trace-cli run --chrome --url http://localhost:5173/route --breakpoint src/pages/Thing.tsx:42
 ```
 
-- **Flags (both targets):** `--bp <file:line | file@substring>` (repeatable) · `--expr '<js>'` (repeatable, evaluated per hit) · `--json [path]` (to a file, or bare `--json` → stdout).
-- **Trigger:** Node → `--curl`; Chrome → `--url` (one navigation) and/or `--step` — an ordered UI journey (`goto`/`click`/`type`/`waitfor`/`wait`/`newtab`/`eval`, validated against a fixed vocabulary); `--out <mp4>` sets the recording path.
-- **Chrome requires ≥1 `--bp`** — debug + video are produced together. `--chrome <port>` attaches to a browser you launched (a real, logged-in session); bare `--chrome` launches a throwaway headless Chrome.
+- **Flags (both targets):** `--breakpoint <file:line | file@substring>` (repeatable) · `--expression '<js>'` (repeatable, evaluated per hit) · `--json [path]` (to a file, or bare `--json` → stdout).
+- **Trigger:** Node → `--curl`; Chrome → `--url` (one navigation) and/or `--step` — an ordered UI journey (`goto`/`click`/`type`/`waitfor`/`wait`/`newtab`/`eval`, validated against a fixed vocabulary); `--output <mp4>` sets the recording path.
+- **Chrome requires ≥1 `--breakpoint`** — debug + video are produced together. `--chrome <port>` attaches to a browser you launched (a real, logged-in session); bare `--chrome` launches a throwaway headless Chrome.
 - **Chrome always records** a debug-replay video (motion screencast + the live trace panel: stack/locals/watch) → uploaded to S3 if `S3_ENDPOINT` is set (`data.recording.url`), else kept as a local path.
 - **I/O & exit:** `stdout` = the trace; `stderr` = structured logs (`TRACE_LOG_LEVEL=debug|info|warn|error|silent`, `TRACE_LOG_FORMAT=json|pretty`); exit `0` ok · `1` runtime · `2` usage.
 - Inputs **and** the emitted envelope are validated (class-validator) before anything runs or ships. Other knobs (hit cap, stack depth, source root, attach timeout) use sane defaults — kept off the flag surface.
@@ -99,21 +108,22 @@ const restored = Trace.fromPlain(envelope); // rehydrate a stored envelope into 
 
 ## Realtime UI and Docker
 
+- This section is optional infrastructure. It is for collecting and visualizing traces, not for running the CLI itself.
 - `trace-cli serve` = **collector + realtime web UI** (Langfuse-style): a live session list over SSE + a per-trace timeline (stack, locals, watched expressions, response).
 - Point any trace at it with `TRACE_COLLECTOR_URL` → every run POSTs its envelope.
-- Sessions persist in **Postgres** — `DATABASE_URL` (or `POSTGRES_URL`, or `--db <url>`); the schema is auto-created on first use, no migrations.
+- Sessions persist in **Postgres** — `DATABASE_URL` (or `POSTGRES_URL`, or `--database-url <url>`); the schema is auto-created on first use, no migrations.
 
 ```bash
 # locally (point at any Postgres; the trace_sessions table is created automatically)
 export DATABASE_URL=postgres://user:pass@localhost:5432/trace
 trace-cli serve --port 4747                 # → http://localhost:4747
-TRACE_COLLECTOR_URL=http://localhost:4747 trace-cli dynamic --node 9229 --bp app.js:42 --curl '…'
+TRACE_COLLECTOR_URL=http://localhost:4747 trace-cli run --node 9229 --breakpoint app.js:42 --curl '…'
 
-# as a Docker service: collector + UI + Postgres (session store) + a mock-aws (S3) for recordings
+# optional Docker services for collector mode: UI/API + Postgres + mock-aws (S3)
 docker compose up --build               # → http://localhost:4747 (UI), :5432 (Postgres), :9000/:9001 (S3)
-# then, from the host where your debug target is reachable:
+# then run the CLI natively from the host where your debug target is reachable:
 export S3_ENDPOINT=http://localhost:9000
-TRACE_COLLECTOR_URL=http://localhost:4747 trace-cli dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9
+TRACE_COLLECTOR_URL=http://localhost:4747 trace-cli run --chrome 9222 --url http://localhost:3000 --breakpoint src/App.tsx:9
 ```
 
 - Each envelope = one `trace_sessions` row (full envelope as JSONB + a precomputed summary).
@@ -131,12 +141,12 @@ npm run dev:ui                 # Next.js dev → http://localhost:3000 (reads :4
 
 Code structure **without running anything** — the same envelope, no live target.
 
-- `trace-cli static graph` — call graph / flow tree ("what calls what") for a function or route, via a **language server over LSP** (`prepareCallHierarchy` + `callHierarchy/outgoingCalls`) — the IDE *Show Call Hierarchy* engine, so it's type-accurate (DI-injected services, interface→impl, cross-file imports), not a regex guess.
+- `trace-cli graph` — call graph / flow tree ("what calls what") for a function or route, via a **language server over LSP** (`prepareCallHierarchy` + `callHierarchy/outgoingCalls`) — the IDE *Show Call Hierarchy* engine, so it's type-accurate (DI-injected services, interface→impl, cross-file imports), not a regex guess.
 
 ```bash
 # the common case — just the entry; root + language server are auto-detected
-trace-cli static graph --entry src/auth/auth.service.ts:42:9
-trace-cli static graph --entry src/auth/auth.service.ts@exchangeToken     # …or by symbol
+trace-cli graph --entry src/auth/auth.service.ts:42:9
+trace-cli graph --entry src/auth/auth.service.ts@exchangeToken     # …or by symbol
 ```
 
 - **Only required input:** the entry (`file:line`, `file:line:col`, or `file@symbol`). **Root** auto-found (nearest `tsconfig.json`/`package.json`/`.git`); **LSP server** chosen by file extension (TS/JS bundled). `--depth <n>` bounds it; `--server <cmd>` / `--root <dir>` override.
@@ -158,9 +168,9 @@ trace-cli static graph --entry src/auth/auth.service.ts@exchangeToken     # …o
 **Sibling analyses** share the same envelope, each shelling out to its analyzer (degrading to a clear error diagnostic when the tool isn't installed — `trace-cli doctor` shows what's present):
 
 ```bash
-trace-cli static deps --entry src/index.ts   # module-import graph + circular-dependency groups   (madge)
-trace-cli static complexity src              # per-function cyclomatic complexity                  (lizard)
-trace-cli static symbols src/app.ts          # a file's definition outline (functions/classes/…)   (tree-sitter)
+trace-cli deps --entry src/index.ts   # module-import graph + circular-dependency groups   (madge)
+trace-cli complexity src              # per-function cyclomatic complexity                  (lizard)
+trace-cli symbols src/app.ts          # a file's definition outline (functions/classes/…)   (tree-sitter)
 ```
 
 ## The trace envelope
@@ -170,7 +180,7 @@ trace-cli static symbols src/app.ts          # a file's definition outline (func
 
 ```jsonc
 {
-  "tool": "trace", "version": "0.3.0", "command": "dynamic.node", "ok": true,
+  "tool": "trace", "version": "0.3.0", "command": "run.node", "ok": true,
   "meta": { "at": "…", "sessionId": "…", "durationMs": 142 },
   "target": { "kind": "node", "source": "cdp", "trigger": "curl …" },
   "data": {
@@ -209,20 +219,20 @@ Sample servers under `test/servers/` — a Node order-API and a React checkout U
 ```bash
 # Node (CDP)
 PORT=3100 node --inspect=9230 test/servers/node-api/server.js &
-trace-cli dynamic --node 9230 --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1&coupon=SAVE10&region=US"' \
-  --bp "test/servers/node-api/server.js@subtotal += it.lineTotal" --expr subtotal --expr 'it.sku'
+trace-cli run --node 9230 --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1&coupon=SAVE10&region=US"' \
+  --breakpoint "test/servers/node-api/server.js@subtotal += it.lineTotal" --expression subtotal --expression 'it.sku'
 
 # React (Chrome / CDP) — frontend through Vite source maps; bare --chrome → the CLI launches headless Chrome itself
 cd test/servers/react-app && npm install && npm run dev &     # serves :5180
-trace-cli dynamic --chrome --url http://localhost:5180 \
-  --bp "test/servers/react-app/src/price.ts@sum = sum + parseInt" --expr sum
+trace-cli run --chrome --url http://localhost:5180 \
+  --breakpoint "test/servers/react-app/src/price.ts@sum = sum + parseInt" --expression sum
 ```
 
 - Both emit the same envelope shape; prefix either with `TRACE_COLLECTOR_URL=http://localhost:4747` to watch them land live in the `trace-cli serve` UI.
 
 ## Roadmap
 
-- **Built:** backend pillar (Node · Chrome over CDP, attach *or* auto-launch, scripted journeys + debug-replay video) · static pillar (`trace-cli static`: `graph` via LSP call hierarchy, `deps`/madge, `complexity`/lizard, `symbols`/tree-sitter) · collector/UI · Docker.
+- **Built:** backend pillar (`trace-cli run`: Node · Chrome over CDP, attach *or* auto-launch, scripted journeys + debug-replay video) · static pillar (`graph` via LSP call hierarchy, `deps`/madge, `complexity`/lizard, `symbols`/tree-sitter) · collector/UI · Docker.
 - **Next** (same envelope): **DAP languages** (Python, Go, Java, C/C++) for *dynamic* tracing via a second `ProtocolDriver` · `trace-cli exec` (OTel spans) · `trace-cli web` (Playwright) · `trace-cli correlate` (the cross-tier `traceparent` handshake).
 - See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 

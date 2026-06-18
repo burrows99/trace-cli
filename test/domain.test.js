@@ -3,17 +3,17 @@ import "reflect-metadata";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { Trace, TraceMeta, TraceData, TraceEvent, Breakpoint, Diagnostic, Loc } from "../dist/domain/index.js";
+import { Trace, TraceMeta, TraceData, TraceEvent, Breakpoint, Diagnostic, SourceLocation } from "../dist/domain/index.js";
 import { LineageAnalyzer } from "../dist/analysis/LineageAnalyzer.js";
 import { BreakpointResolver } from "../dist/engine/BreakpointResolver.js";
 import { SourceMaps } from "../dist/engine/SourceMaps.js";
 
-test("Loc.parse handles file:line, file:line:col, <native>", () => {
-  const a = Loc.parse("src/a.ts:42");
-  assert.ok(a instanceof Loc); assert.equal(a.file, "src/a.ts"); assert.equal(a.line, 42);
-  const b = Loc.parse("src/a.ts:42:7");
-  assert.equal(b.line, 42); assert.equal(b.col, 7);
-  assert.equal(Loc.parse("<native>"), undefined);
+test("SourceLocation.parse handles file:line, file:line:column, <native>", () => {
+  const a = SourceLocation.parse("src/a.ts:42");
+  assert.ok(a instanceof SourceLocation); assert.equal(a.file, "src/a.ts"); assert.equal(a.line, 42);
+  const b = SourceLocation.parse("src/a.ts:42:7");
+  assert.equal(b.line, 42); assert.equal(b.column, 7);
+  assert.equal(SourceLocation.parse("<native>"), undefined);
 });
 
 test("Trace.toJSON produces a valid envelope; validate() passes", () => {
@@ -30,17 +30,17 @@ test("Trace.toJSON produces a valid envelope; validate() passes", () => {
 });
 
 test("Trace.ok defaults to false when an error diagnostic is present", () => {
-  const t = new Trace({ version: "0.3.0", command: "dynamic.node", diagnostics: [Diagnostic.error("X", "boom")] });
+  const t = new Trace({ version: "0.3.0", command: "run.node", diagnostics: [Diagnostic.error("X", "boom")] });
   assert.equal(t.ok, false);
   assert.equal(t.hasErrors(), true);
 });
 
 test("Trace.fromPlain rehydrates the full object graph to class instances", () => {
   const t = new Trace({
-    version: "0.3.0", command: "dynamic.node",
+    version: "0.3.0", command: "run.node",
     meta: new TraceMeta({ at: new Date().toISOString(), sessionId: "s2" }),
     data: new TraceData({
-      events: [new TraceEvent({ seq: 1, kind: "breakpoint", loc: Loc.parse("app.js:30"), attrs: { locals: { x: 1 } } })],
+      events: [new TraceEvent({ sequence: 1, kind: "breakpoint", location: SourceLocation.parse("app.js:30"), attributes: { locals: { x: 1 } } })],
       breakpoints: [new Breakpoint({ file: "app.js", line: 30, bound: true })],
     }),
     diagnostics: [Diagnostic.warn("BP_UNBOUND", "y")],
@@ -48,12 +48,12 @@ test("Trace.fromPlain rehydrates the full object graph to class instances", () =
   const back = Trace.fromPlain(JSON.parse(JSON.stringify(t.toJSON())));
   assert.ok(back instanceof Trace);
   assert.ok(back.data.events[0] instanceof TraceEvent);
-  assert.ok(back.data.events[0].loc instanceof Loc);
+  assert.ok(back.data.events[0].location instanceof SourceLocation);
   assert.ok(back.diagnostics[0] instanceof Diagnostic);
   assert.equal(back.data.breakpoints[0].line, 30);
 });
 
-const ev = (seq, exprs, locals) => new TraceEvent({ seq, t: seq * 10, kind: "breakpoint", attrs: { exprs, locals } });
+const ev = (sequence, exprs, locals) => new TraceEvent({ sequence, time: sequence * 10, kind: "breakpoint", attributes: { exprs, locals } });
 
 test("LineageAnalyzer tracks a value mutating across hits (expr wins over local)", () => {
   const lin = LineageAnalyzer.compute([ev(1, { total: 0 }, { total: 0, i: 0 }), ev(2, { total: 9.99 }, { total: 9.99, i: 1 }), ev(3, { total: 14.49 }, { total: 14.49, i: 2 })]);

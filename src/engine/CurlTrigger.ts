@@ -8,10 +8,10 @@ export interface CurlResult { exitCode: number; body?: string; stderr?: string; 
  * when to fire it and what to do with the result.
  */
 export class CurlTrigger {
-  static run(cmd: string, timeoutMs: number): Promise<CurlResult> {
-    return new Promise((res) => {
-      exec(cmd, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err: any, stdout, stderr) => {
-        res({ exitCode: err?.code ?? 0, body: String(stdout || "").slice(0, 1500), stderr: String(stderr || "").slice(0, 500) || undefined, error: err?.killed ? "timeout" : undefined });
+  static run(command: string, timeoutMs: number): Promise<CurlResult> {
+    return new Promise((resolve) => {
+      exec(command, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error: any, stdout, stderr) => {
+        resolve({ exitCode: error?.code ?? 0, body: String(stdout || "").slice(0, 1500), stderr: String(stderr || "").slice(0, 500) || undefined, error: error?.killed ? "timeout" : undefined });
       });
     });
   }

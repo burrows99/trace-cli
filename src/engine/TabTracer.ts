@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { CdpDriver } from "../transport/CdpDriver.js";
 import { Cdp } from "../transport/cdp.js";
 import { SourceMaps } from "./SourceMaps.js";
-import { BpBinder } from "./BpBinder.js";
+import { BreakpointBinder } from "./BreakpointBinder.js";
 import { BINDING_NAME, HELPER_SOURCE, LogpointCapturer } from "./Logpoint.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
 import type { TraceEvent } from "../domain/TraceEvent.js";
@@ -27,10 +27,10 @@ import type { TraceConfig, TracedHit } from "./JourneyRunner.js";
  */
 export class TabTracer {
   #driver: CdpDriver;
-  #cfg: TraceConfig;
+  #config: TraceConfig;
   #hits: TracedHit[];
-  #binder: BpBinder;
-  #sm: SourceMaps;
+  #binder: BreakpointBinder;
+  #sourceMaps: SourceMaps;
   #capturer: LogpointCapturer;
   #events: TraceEvent[] = [];
   #chain: Promise<unknown> = Promise.resolve();
@@ -38,13 +38,13 @@ export class TabTracer {
   #firstRunPauseId: string | null = null;
   #loaded = false;
 
-  constructor(driver: CdpDriver, cfg: TraceConfig, hits: TracedHit[]) {
+  constructor(driver: CdpDriver, config: TraceConfig, hits: TracedHit[]) {
     this.#driver = driver;
-    this.#cfg = cfg;
+    this.#config = config;
     this.#hits = hits;
-    this.#binder = new BpBinder(cfg.bps, cfg.exprs);
-    this.#sm = new SourceMaps(driver, cfg.root);
-    this.#capturer = new LogpointCapturer(driver, this.#sm, performance.now(), cfg.frames);
+    this.#binder = new BreakpointBinder(config.bps, config.exprs);
+    this.#sourceMaps = new SourceMaps(driver, config.root);
+    this.#capturer = new LogpointCapturer(driver, this.#sourceMaps, performance.now(), config.frames);
   }
 
   /**
@@ -61,10 +61,10 @@ export class TabTracer {
     await this.#driver.send(Cdp.Runtime.evaluate, { expression: HELPER_SOURCE }).catch(() => {});
     // A navigation builds a fresh context where the serializer global is gone — re-install it per document.
     await this.#driver.send(Cdp.Page.addScriptToEvaluateOnNewDocument, { source: HELPER_SOURCE }).catch(() => {});
-    this.#driver.on(Cdp.Runtime.bindingCalled, (e: any) => { if (e?.name === BINDING_NAME) this.#onHit(e.payload); });
+    this.#driver.on(Cdp.Runtime.bindingCalled, (event: any) => { if (event?.name === BINDING_NAME) this.#onHit(event.payload); });
     if (bindBeforeFirstRun) await this.#armFirstRunBindPause();
-    this.#driver.on(Cdp.Debugger.paused, (p: any) => { void this.#onPause(p); });
-    await this.#binder.tryBind(this.#driver, this.#sm);
+    this.#driver.on(Cdp.Debugger.paused, (paused: any) => { void this.#onPause(paused); });
+    await this.#binder.tryBind(this.#driver, this.#sourceMaps);
   }
 
   /**
@@ -74,13 +74,13 @@ export class TabTracer {
    * binding settles. Logpoint hits do NOT come through here.
    */
   async #armFirstRunBindPause(): Promise<void> {
-    const r = await this.#driver.send(Cdp.Debugger.setInstrumentationBreakpoint, { instrumentation: "beforeScriptExecution" }).catch(() => null);
-    this.#firstRunPauseId = r?.breakpointId ?? null;
+    const result = await this.#driver.send(Cdp.Debugger.setInstrumentationBreakpoint, { instrumentation: "beforeScriptExecution" }).catch(() => null);
+    this.#firstRunPauseId = result?.breakpointId ?? null;
   }
 
   /** Re-bind after a navigation — newly-parsed chunks may carry a previously-unbound breakpoint. */
   async reBind(): Promise<void> {
-    await this.#binder.tryBind(this.#driver, this.#sm).catch(() => {});
+    await this.#binder.tryBind(this.#driver, this.#sourceMaps).catch(() => {});
   }
 
   /** This tab's breakpoint-binding report (bound/unbound per breakpoint). */
@@ -88,16 +88,16 @@ export class TabTracer {
     return this.#binder.report();
   }
 
-  /** A logpoint fired. Serialize conversions (the stack resolve is async) so seq + ordering stay stable. */
+  /** A logpoint fired. Serialize conversions (the stack resolve is async) so sequence + ordering stay stable. */
   #onHit(payload: string): void {
-    if (this.#hits.length >= this.#cfg.maxHits) return;
+    if (this.#hits.length >= this.#config.maxHits) return;
     this.#chain = this.#chain.then(async () => {
-      if (this.#hits.length >= this.#cfg.maxHits) return;
-      const ev = await this.#capturer.toEvent(payload, this.#events.length + 1).catch(() => null);
-      if (!ev) return;
-      this.#events.push(ev);
-      this.#hits.push({ ev, t: Date.now() });
-      this.#cfg.onEvent?.(this.#hits.map((h) => h.ev));
+      if (this.#hits.length >= this.#config.maxHits) return;
+      const event = await this.#capturer.toEvent(payload, this.#events.length + 1).catch(() => null);
+      if (!event) return;
+      this.#events.push(event);
+      this.#hits.push({ ev: event, t: Date.now() });
+      this.#config.onEvent?.(this.#hits.map((hit) => hit.ev));
     });
   }
 
@@ -110,11 +110,11 @@ export class TabTracer {
   async #onPause(paused: any): Promise<void> {
     try {
       if (paused.reason !== "instrumentation") { await this.#driver.send(Cdp.Debugger.resume).catch(() => {}); return; }
-      const cap = this.#hits.length < this.#cfg.maxHits;
-      if (cap && !this.#binder.allSettled()) await this.#binder.tryBind(this.#driver, this.#sm);
-      if ((this.#binder.allSettled() || this.#loaded || !cap) && this.#firstRunPauseId) {
-        const id = this.#firstRunPauseId; this.#firstRunPauseId = null;
-        await this.#driver.send(Cdp.Debugger.removeBreakpoint, { breakpointId: id }).catch(() => {}); // drop THE ONE PAUSE
+      const underHitCap = this.#hits.length < this.#config.maxHits;
+      if (underHitCap && !this.#binder.allSettled()) await this.#binder.tryBind(this.#driver, this.#sourceMaps);
+      if ((this.#binder.allSettled() || this.#loaded || !underHitCap) && this.#firstRunPauseId) {
+        const firstRunPauseId = this.#firstRunPauseId; this.#firstRunPauseId = null;
+        await this.#driver.send(Cdp.Debugger.removeBreakpoint, { breakpointId: firstRunPauseId }).catch(() => {}); // drop THE ONE PAUSE
       }
     } catch { /* keep the journey moving */ }
     await this.#driver.send(Cdp.Debugger.resume).catch(() => {});

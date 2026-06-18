@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
+import { Code } from "../../shared/codes.js";
 import type { ToolRun } from "../../shared/runTool.js";
 import { ShellAnalysisCommand, type AnalysisOutcome, type ToolInvocation } from "./ShellAnalysisCommand.js";
 
@@ -12,7 +13,7 @@ export interface SymbolsRequest {
   args?: Record<string, unknown>;
 }
 
-interface SymbolEntry { name: string; kind: string; loc: { file: string; line: number; col?: number }; }
+interface SymbolEntry { name: string; kind: string; location: { file: string; line: number; column?: number }; }
 export interface SymbolReport { file: string; symbols: SymbolEntry[]; }
 
 // tree-sitter node types that name a definition → the kind we report. Covers common JS/TS/Python/Rust/Go/C grammars.
@@ -29,7 +30,7 @@ const DEF_LINE = /^(\s*)\(([a-z_]+)\s+\[(\d+),\s*\d+\]/;
 const NAME_LINE = /name:\s*\((?:identifier|type_identifier|property_identifier|field_identifier|constant)\s+\[(\d+),\s*(\d+)\]\s*-\s*\[(\d+),\s*(\d+)\]/;
 
 /**
- * SymbolsCommand — the `static symbols` analysis: top-level definitions in a file via `tree-sitter parse`.
+ * SymbolsCommand — the `symbols` analysis: top-level definitions in a file via `tree-sitter parse`.
  * A {@link ShellAnalysisCommand}: the base owns the run/envelope/failure skeleton; this class supplies the
  * tree-sitter call and the S-expression → Symbol normalization. tree-sitter emits node *types* + positions but
  * not source text, so {@link interpret} re-reads the file and slices each definition's name-identifier span to
@@ -40,67 +41,67 @@ const NAME_LINE = /name:\s*\((?:identifier|type_identifier|property_identifier|f
 export class SymbolsCommand extends ShellAnalysisCommand<SymbolsRequest> {
   protected readonly tool = "tree-sitter";
   protected readonly command = "symbols.tree-sitter";
-  protected readonly errorCode = "SYMBOLS_FAILED";
+  protected readonly errorCode = Code.SYMBOLS_FAILED;
   protected readonly component = "symbols";
   protected override nonZeroIsFailure(): boolean { return false; }
 
   /** Resolve the request's file against its root (or cwd). */
-  #abs(req: SymbolsRequest): string {
-    return isAbsolute(req.file) ? req.file : resolve(req.root ?? process.cwd(), req.file);
+  #abs(request: SymbolsRequest): string {
+    return isAbsolute(request.file) ? request.file : resolve(request.root ?? process.cwd(), request.file);
   }
 
-  protected invocation(req: SymbolsRequest): ToolInvocation {
-    return { argv: ["parse", this.#abs(req)], cwd: req.root ?? process.cwd() };
+  protected invocation(request: SymbolsRequest): ToolInvocation {
+    return { argv: ["parse", this.#abs(request)], cwd: request.root ?? process.cwd() };
   }
 
-  protected interpret(res: ToolRun, req: SymbolsRequest): AnalysisOutcome {
+  protected interpret(toolRun: ToolRun, request: SymbolsRequest): AnalysisOutcome {
     let source: string;
-    try { source = readFileSync(this.#abs(req), "utf8"); }
-    catch (e: any) { throw new Error(`cannot read ${req.file}: ${String(e?.message ?? e).split("\n")[0]}`); }
-    const symbols = SymbolsCommand.parseSexp(res.stdout, source, req.file);
-    if (!symbols.length && !res.ok) {
+    try { source = readFileSync(this.#abs(request), "utf8"); }
+    catch (error: any) { throw new Error(`cannot read ${request.file}: ${String(error?.message ?? error).split("\n")[0]}`); }
+    const symbols = SymbolsCommand.parseSexp(toolRun.stdout, source, request.file);
+    if (!symbols.length && !toolRun.ok) {
       // No symbols and a non-zero exit usually means "no grammar for this file type" or a parse error.
-      return { diagnostics: [Diagnostic.error(this.errorCode, res.error || res.stderr.split("\n")[0] || `tree-sitter exited ${res.code}`)] };
+      return { diagnostics: [Diagnostic.error(this.errorCode, toolRun.error || toolRun.stderr.split("\n")[0] || `tree-sitter exited ${toolRun.exitCode}`)] };
     }
-    return { data: new TraceData({ symbols: { file: req.file, symbols } as SymbolReport }) };
+    return { data: new TraceData({ symbols: { file: request.file, symbols } as SymbolReport }) };
   }
 
   /**
    * Parse a `tree-sitter parse` S-expression into definition Symbols. For each definition node we take the
    * first following `name:` identifier field (it precedes nested children in tree-sitter output) and slice the
-   * source at that [row,col] span to recover the name. Greedy + line-based — robust for top-level + one level
+   * source at that [row,column] span to recover the name. Greedy + line-based — robust for top-level + one level
    * of nesting (a class and its methods), which is what a symbol outline needs.
    */
   static parseSexp(sexp: string, source: string, file: string): SymbolEntry[] {
     const lines = source.split("\n");
-    const out: SymbolEntry[] = [];
+    const entries: SymbolEntry[] = [];
     let pending: { kind: string; row: number } | null = null;
 
-    for (const raw of sexp.split("\n")) {
-      const def = DEF_LINE.exec(raw);
-      if (def && DEF_KINDS[def[2]]) { pending = { kind: DEF_KINDS[def[2]], row: Number(def[3]) }; continue; }
-      const nm = NAME_LINE.exec(raw);
-      if (nm && pending) {
-        const row = Number(nm[1]);
-        const colStart = Number(nm[2]);
-        const colEnd = Number(nm[4]);
-        const lineText = lines[row] ?? "";
-        const name = Number(nm[3]) === row ? lineText.slice(colStart, colEnd) : lineText.slice(colStart);
-        if (name) out.push({ name, kind: pending.kind, loc: { file, line: pending.row + 1, col: colStart } });
+    for (const rawLine of sexp.split("\n")) {
+      const defMatch = DEF_LINE.exec(rawLine);
+      if (defMatch && DEF_KINDS[defMatch[2]]) { pending = { kind: DEF_KINDS[defMatch[2]], row: Number(defMatch[3]) }; continue; }
+      const nameMatch = NAME_LINE.exec(rawLine);
+      if (nameMatch && pending) {
+        const nameRow = Number(nameMatch[1]);
+        const colStart = Number(nameMatch[2]);
+        const colEnd = Number(nameMatch[4]);
+        const lineText = lines[nameRow] ?? "";
+        const name = Number(nameMatch[3]) === nameRow ? lineText.slice(colStart, colEnd) : lineText.slice(colStart);
+        if (name) entries.push({ name, kind: pending.kind, location: { file, line: pending.row + 1, column: colStart } });
         pending = null;
       }
     }
-    return out;
+    return entries;
   }
 
   /** Human view: definitions grouped by kind, in source order. */
   render(trace: Trace): string {
-    const maybe = trace.data.symbols as SymbolReport | undefined;
-    const guard = this.emptyRender(trace, !!maybe?.symbols?.length, "symbols", "no definitions found");
+    const maybeReport = trace.data.symbols as SymbolReport | undefined;
+    const guard = this.emptyRender(trace, !!maybeReport?.symbols?.length, "symbols", "no definitions found");
     if (guard !== undefined) return guard;
-    const r = maybe!;
-    const lines = [`symbols — ${r.symbols.length} definitions in ${r.file}`, ""];
-    for (const s of r.symbols) lines.push(`  ${s.kind.padEnd(10)} ${s.name}  :${s.loc.line}`);
+    const report = maybeReport!;
+    const lines = [`symbols — ${report.symbols.length} definitions in ${report.file}`, ""];
+    for (const symbolEntry of report.symbols) lines.push(`  ${symbolEntry.kind.padEnd(10)} ${symbolEntry.name}  :${symbolEntry.location.line}`);
     return lines.join("\n");
   }
 }

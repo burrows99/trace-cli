@@ -8,27 +8,27 @@
  * Why a call *graph* (nodes + edges) and not a tree: a function reached from two places, or a recursive
  * cycle, is one node with two in-edges — not a duplicated/ infinite subtree. The normalized graph dedupes
  * naturally; the human "flow tree" is a traversal over it (see GraphCommand), where shared callees and
- * back-edges are marked rather than re-expanded. The node/edge shapes mirror the `Graph`/`Loc` $defs already
+ * back-edges are marked rather than re-expanded. The node/edge shapes mirror the `Graph`/`SourceLocation` $defs already
  * declared in the output schema so consumers learn one vocabulary.
  */
-import { Loc } from "../domain/Loc.js";
+import { SourceLocation } from "../domain/SourceLocation.js";
 
-/** Where to start: a file plus a 1-based line (optionally a 1-based col), or a symbol name. */
-export interface EntryRef {
+/** Where to start: a file plus a 1-based line (optionally a 1-based column), or a symbol name. */
+export interface EntryReference {
   file: string;
   line?: number;
-  col?: number;
+  column?: number;
   symbol?: string;
 }
 
-export namespace EntryRef {
-  /** Parse a CLI `--entry`: `file@symbol` → {file, symbol}; `file:line[:col]` → {file, line, col?}; else {file}. */
-  export function parse(ref: string): EntryRef {
-    const at = ref.indexOf("@");
-    if (at >= 0) return { file: ref.slice(0, at), symbol: ref.slice(at + 1) };
-    const loc = Loc.parse(ref);
-    if (loc?.line) return { file: loc.file, line: loc.line, ...(loc.col != null ? { col: loc.col } : {}) };
-    return { file: ref };
+export namespace EntryReference {
+  /** Parse a CLI `--entry`: `file@symbol` → {file, symbol}; `file:line[:column]` → {file, line, column?}; else {file}. */
+  export function parse(reference: string): EntryReference {
+    const atIndex = reference.indexOf("@");
+    if (atIndex >= 0) return { file: reference.slice(0, atIndex), symbol: reference.slice(atIndex + 1) };
+    const location = SourceLocation.parse(reference);
+    if (location?.line) return { file: location.file, line: location.line, ...(location.column != null ? { column: location.column } : {}) };
+    return { file: reference };
   }
 }
 
@@ -49,12 +49,12 @@ export interface CallGraphOptions {
 /** Scope of a node's source file: in the workspace, or an external dependency / outside the root. */
 export type NodeScope = "local" | "external";
 
-/** A function/method node. `id` is stable (`relpath:line:col`); shapes align with the schema `Graph`/`Loc` $defs. */
+/** A function/method node. `id` is stable (`relpath:line:column`); shapes align with the schema `Graph`/`SourceLocation` $defs. */
 export interface GraphNode {
   id: string;
   kind: string;   // TS ScriptElementKind: "function" | "method" | "local function" | …
   label: string;  // symbol name, prefixed with its container when known
-  loc: { file: string; line: number; col?: number; endLine?: number };
+  location: { file: string; line: number; column?: number; endLine?: number };
   scope: NodeScope;
   external?: boolean; // true for scope !== "local" — convenience flag mirroring the schema
 }
@@ -89,5 +89,5 @@ export interface CodeGraphProvider {
   /** Can this provider run against `root`? (e.g. its CLI is installed, or its library resolves.) Never throws. */
   isAvailable(root: string): Promise<ProviderAvailability>;
   /** Build the outgoing-call graph rooted at `entry`. Throws with a clear message on unresolvable input. */
-  callGraph(entry: EntryRef, opts: CallGraphOptions): Promise<CodeGraph>;
+  callGraph(entry: EntryReference, opts: CallGraphOptions): Promise<CodeGraph>;
 }
