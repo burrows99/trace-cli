@@ -19,7 +19,7 @@ const TOOLS: ToolDef[] = [
   { name: "lizard", pillar: "static", purpose: "static complexity", cmd: "lizard", args: ["--version"] },
   { name: "tree-sitter", pillar: "static", purpose: "static symbols (AST)", cmd: "tree-sitter", args: ["--version"] },
   { name: "madge", pillar: "static", purpose: "static deps (JS/TS)", cmd: "madge", args: ["--version"] },
-  { name: "typescript-language-server", pillar: "static", purpose: "code graph — `trace graph` default LSP server (wraps tsserver)", mod: "typescript-language-server" },
+  { name: "typescript-language-server", pillar: "static", purpose: "code graph — `trace static graph` default LSP server (wraps tsserver)", mod: "typescript-language-server" },
   { name: "otel-cli", pillar: "runtime", purpose: "exec spans (OTel)", cmd: "otel-cli", args: ["--version"] },
   { name: "playwright", pillar: "frontend", purpose: "web traces", cmd: "playwright", args: ["--version"] },
   { name: "s3", pillar: "storage", purpose: "upload recordings (S3_ENDPOINT)", s3: true },

@@ -48,7 +48,10 @@ export class TraceData {
   @IsOptional() @IsString() finalUrl?: string;
   @IsOptional() @IsString() screenshot?: string;
   @IsOptional() tools?: unknown[];
-  @IsOptional() graph?: unknown; // `graph` command payload: a CodeGraph {nodes, edges, …} (see codegraph/)
+  @IsOptional() graph?: unknown;      // `static graph` payload: a call CodeGraph {nodes, edges, …} (see codegraph/)
+  @IsOptional() deps?: unknown;       // `static deps` payload: a module-import Graph (madge) — same Graph $def
+  @IsOptional() symbols?: unknown;    // `static symbols` payload: Symbol[] (tree-sitter) — see schema $defs/Symbol
+  @IsOptional() complexity?: unknown; // `static complexity` payload: Symbol[] with metrics (lizard)
 
   constructor(init: Partial<TraceData> = {}) { Object.assign(this, init); }
 }

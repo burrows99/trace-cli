@@ -3,6 +3,9 @@ import { writeFileSync } from "node:fs";
 
 import { DynamicCommand, type DynamicTargetKind } from "./commands/DynamicCommand.js";
 import { GraphCommand } from "./commands/GraphCommand.js";
+import { DepsCommand } from "./commands/DepsCommand.js";
+import { ComplexityCommand } from "./commands/ComplexityCommand.js";
+import { SymbolsCommand } from "./commands/SymbolsCommand.js";
 import { DoctorCommand } from "./commands/DoctorCommand.js";
 import { ExportSkillCommand } from "./commands/ExportSkillCommand.js";
 import { ManifestCommand } from "./commands/ManifestCommand.js";
@@ -106,6 +109,35 @@ export class Cli {
     process.exit(trace.hasErrors() ? 1 : 0);
   }
 
+  /** Shared tail for the static analyses: emit the envelope, forward to a collector, exit on the error state. */
+  async #finish(trace: Trace, render: () => string, o: any): Promise<never> {
+    emit(trace, render, o);
+    const collector = process.env.TRACE_COLLECTOR_URL;
+    if (collector) await Collector.emit(collector, trace.toJSON());
+    process.exit(trace.hasErrors() ? 1 : 0);
+  }
+
+  async #runDeps(o: any): Promise<void> {
+    if (!o.entry) usage("static deps needs --entry <file|dir>");
+    const cmd = new DepsCommand();
+    const trace = await cmd.run({ entry: o.entry, root: o.root, args: { entry: o.entry, ...(o.root ? { root: o.root } : {}) } });
+    await this.#finish(trace, () => cmd.render(trace), o);
+  }
+
+  async #runComplexity(path: string, o: any): Promise<void> {
+    const p = path || ".";
+    const cmd = new ComplexityCommand();
+    const trace = await cmd.run({ path: p, root: o.root, args: { path: p, ...(o.root ? { root: o.root } : {}) } });
+    await this.#finish(trace, () => cmd.render(trace), o);
+  }
+
+  async #runSymbols(file: string, o: any): Promise<void> {
+    if (!file) usage("static symbols needs a <file>");
+    const cmd = new SymbolsCommand();
+    const trace = await cmd.run({ file, root: o.root, args: { file, ...(o.root ? { root: o.root } : {}) } });
+    await this.#finish(trace, () => cmd.render(trace), o);
+  }
+
   build(): Command {
     const program = new Command()
       .name("trace-cli")
@@ -126,7 +158,12 @@ export class Cli {
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((o) => this.#runDynamic(o));
 
-    program.command("graph")
+    // static analysis — code structure without running the app. Each subcommand shells out to one analyzer
+    // and emits the same Trace envelope as the runtime `dynamic` command (call graph · deps · complexity · symbols).
+    const stat = program.command("static")
+      .description("static analysis — code structure without running the app (call graph · deps · complexity · symbols)");
+
+    stat.command("graph")
       .description("call graph rooted at an entry → the flow tree for a function/route, via LSP call hierarchy")
       .requiredOption("--entry <ref>", "where to start: file:line, file:line:col, or file@symbol (e.g. src/auth.service.ts:42:9 or src/auth.service.ts@exchangeToken)")
       .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git above the entry)")
@@ -134,6 +171,27 @@ export class Cli {
       .option("--depth <n>", "max call depth expanded from the entry", int, 6)
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((o) => this.#runGraph(o));
+
+    stat.command("deps")
+      .description("module-import graph (+ circular-dependency groups) via madge")
+      .requiredOption("--entry <path>", "file or directory whose import graph to build")
+      .option("--root <dir>", "working directory for madge (default: cwd)")
+      .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
+      .action((o) => this.#runDeps(o));
+
+    stat.command("complexity")
+      .description("per-function cyclomatic complexity via lizard")
+      .argument("[path]", "file or directory to analyze (default: current directory)", ".")
+      .option("--root <dir>", "working directory for lizard (default: cwd)")
+      .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
+      .action((path, o) => this.#runComplexity(path, o));
+
+    stat.command("symbols")
+      .description("top-level definitions (functions/classes/types) in a file via tree-sitter")
+      .argument("<file>", "source file to outline")
+      .option("--root <dir>", "working directory / project root (default: cwd)")
+      .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
+      .action((file, o) => this.#runSymbols(file, o));
 
     program.command("doctor")
       .description("report which backing tools are installed (+ versions), grouped by pillar")

@@ -106,8 +106,8 @@ cross-file imports), not a regex guess.
 
 ```bash
 # the common case — just the entry; root + language server are auto-detected
-trace-cli graph --entry src/auth/auth.service.ts:42:9
-trace-cli graph --entry src/auth/auth.service.ts@exchangeToken     # …or by symbol
+trace-cli static graph --entry src/auth/auth.service.ts:42:9
+trace-cli static graph --entry src/auth/auth.service.ts@exchangeToken     # …or by symbol
 ```
 
 The only required input is the entry (`file:line`, `file:line:col`, or `file@symbol`). The project **root** is
