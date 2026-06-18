@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { createSessionStore } from "./createSessionStore.js";
 import type { SessionStore } from "./SessionStore.js";
+import { DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // The Next.js static export (ui/out) is copied here by the build (see package.json `build`).
@@ -24,6 +25,16 @@ const MIME: Record<string, string> = {
   ".webp": "image/webp",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
+};
+
+const CT_JSON = "application/json";
+/** Permissive CORS origin attached to every API/SSE response (the UI may be served from any host). */
+const CORS_ORIGIN: Record<string, string> = { "access-control-allow-origin": "*" };
+/** Preflight response headers for OPTIONS. */
+const CORS_PREFLIGHT: Record<string, string> = {
+  ...CORS_ORIGIN,
+  "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
+  "access-control-allow-headers": "content-type",
 };
 
 /**
@@ -66,7 +77,7 @@ export class Collector {
   static async emit(url: string, envelope: unknown): Promise<boolean> {
     const endpoint = url.replace(/\/+$/, "") + "/v1/traces";
     try {
-      const r = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope) });
+      const r = await fetch(endpoint, { method: "POST", headers: { "content-type": CT_JSON }, body: JSON.stringify(envelope) });
       process.stderr.write(`[trace] emitted → ${endpoint} (${r.status})\n`);
       return r.ok;
     } catch (e: any) {
@@ -76,14 +87,14 @@ export class Collector {
   }
 
   listen(opts: { port?: number; host?: string } = {}): Server {
-    const { port = 4000, host = "0.0.0.0" } = opts;
+    const { port = DEFAULT_COLLECTOR_PORT, host = "0.0.0.0" } = opts;
     const store = this.#store;
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url ?? "/", "http://localhost");
-      const json = (code: number, obj: unknown) => { res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" }); res.end(JSON.stringify(obj)); };
+      const json = (code: number, obj: unknown) => { res.writeHead(code, { "content-type": CT_JSON, ...CORS_ORIGIN }); res.end(JSON.stringify(obj)); };
 
-      if (req.method === "OPTIONS") { res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,DELETE,OPTIONS", "access-control-allow-headers": "content-type" }); return res.end(); }
+      if (req.method === "OPTIONS") { res.writeHead(204, CORS_PREFLIGHT); return res.end(); }
 
       if (req.method === "GET" && url.pathname === "/api/sessions") return void store.list().then((l) => json(200, l)).catch((e) => json(500, { error: e.message }));
       if (req.method === "GET" && url.pathname.startsWith("/api/sessions/")) {
@@ -93,7 +104,7 @@ export class Collector {
       if (req.method === "DELETE" && url.pathname === "/api/sessions") return void store.clear().then(() => json(200, { ok: true })).catch((e) => json(500, { error: e.message }));
 
       if (req.method === "GET" && url.pathname === "/api/stream") {
-        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", ...CORS_ORIGIN });
         const unsub = store.subscribe((s) => res.write(`data: ${JSON.stringify(s)}\n\n`));
         store.size().then((count) => res.write(`event: hello\ndata: ${JSON.stringify({ count })}\n\n`)).catch(() => res.write(`event: hello\ndata: ${JSON.stringify({ count: null })}\n\n`));
         const keepalive = setInterval(() => res.write(": keepalive\n\n"), 25000);

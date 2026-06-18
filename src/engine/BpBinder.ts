@@ -1,4 +1,5 @@
 import { CdpDriver, log } from "../transport/CdpDriver.js";
+import { Cdp } from "../transport/cdp.js";
 import { SourceMaps } from "./SourceMaps.js";
 import { type ResolvedBp } from "./BreakpointResolver.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
@@ -24,7 +25,7 @@ export class BpBinder {
       const g = await sm.findGenerated(s.bp.file, s.bp.line);
       if (!g) { s.note = "no loaded script/source matched (loaded yet? right file/route?)"; continue; }
       s.attempted = true;
-      const r = await driver.send("Debugger.setBreakpointByUrl", { urlRegex: g.urlRegex, lineNumber: g.lineNumber, columnNumber: g.columnNumber });
+      const r = await driver.send(Cdp.Debugger.setBreakpointByUrl, { urlRegex: g.urlRegex, lineNumber: g.lineNumber, columnNumber: g.columnNumber });
       s.bound = !!(r.locations && r.locations.length);
       s.mapped = g.mapped;
       s.note = s.bound ? undefined : "breakpoint set but no location resolved yet";

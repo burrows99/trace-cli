@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 
 import { CdpDriver, renderRemoteObject } from "../transport/CdpDriver.js";
+import { Cdp } from "../transport/cdp.js";
 import { SourceMaps } from "./SourceMaps.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
 import { Loc } from "../domain/Loc.js";
@@ -43,13 +44,13 @@ export class EventCapturer {
     const locals: Record<string, unknown> = {};
     for (const sc of top.scopeChain) {
       if (!["local", "block", "catch"].includes(sc.type) || !sc.object?.objectId) continue;
-      const props = await driver.send("Runtime.getProperties", { objectId: sc.object.objectId, ownProperties: true, generatePreview: true });
+      const props = await driver.send(Cdp.Runtime.getProperties, { objectId: sc.object.objectId, ownProperties: true, generatePreview: true });
       for (const p of props.result || []) if (!(p.name in locals)) locals[p.name] = renderRemoteObject(p.value);
     }
     const ex: Record<string, unknown> = {};
     for (const e of ctx.exprs) {
       try {
-        const r = await driver.send("Debugger.evaluateOnCallFrame", { callFrameId: top.callFrameId, expression: e, returnByValue: false, generatePreview: true });
+        const r = await driver.send(Cdp.Debugger.evaluateOnCallFrame, { callFrameId: top.callFrameId, expression: e, returnByValue: false, generatePreview: true });
         ex[e] = r.exceptionDetails ? `⟂ ${String(r.exceptionDetails.exception?.description || r.exceptionDetails.text || "error").split("\n")[0]}` : renderRemoteObject(r.result);
       } catch (err: any) { ex[e] = `⟂ ${err.message}`; }
     }
@@ -67,7 +68,7 @@ export class EventCapturer {
   async runSteps(ctx: CdpCtx, timeoutMs: number): Promise<void> {
     if (ctx.events.length !== 1 || !ctx.steps.length) return;
     for (const s of ctx.steps) {
-      const cmd = ({ over: "Debugger.stepOver", into: "Debugger.stepInto", out: "Debugger.stepOut" } as Record<string, string>)[s];
+      const cmd = ({ over: Cdp.Debugger.stepOver, into: Cdp.Debugger.stepInto, out: Cdp.Debugger.stepOut } as Record<string, string>)[s];
       if (!cmd) continue;
       await this.driver.send(cmd);
       let st: any;

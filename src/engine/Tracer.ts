@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 
 import { CdpDriver, log } from "../transport/CdpDriver.js";
+import { Cdp } from "../transport/cdp.js";
 import { SourceMaps } from "./SourceMaps.js";
 import { BreakpointResolver } from "./BreakpointResolver.js";
 import { BpBinder } from "./BpBinder.js";
@@ -8,9 +9,10 @@ import { EventCapturer, type CdpCtx } from "./EventCapturer.js";
 import { CurlTrigger, type CurlResult } from "./CurlTrigger.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
-import type { TargetKind } from "../domain/Target.js";
+import { TargetKind } from "../domain/Target.js";
 import type { ConsoleLine, NetworkLine } from "../domain/Trace.js";
 import { sleep } from "../shared/sleep.js";
+import { DEFAULT_NODE_PORT, DEFAULT_CHROME_PORT, DEFAULT_ATTACH_TIMEOUT_MS } from "../shared/defaults.js";
 
 export interface CaptureResult {
   target: TargetKind;
@@ -115,13 +117,13 @@ export class Tracer {
   }
 
   async #snap(driver: CdpDriver): Promise<string | null> {
-    try { return (await driver.send("Page.captureScreenshot", { format: "png" })).data; } catch { return null; }
+    try { return (await driver.send(Cdp.Page.captureScreenshot, { format: "png" })).data; } catch { return null; }
   }
 
   // ---- the one capture loop, shared by every target -------------------------------------------
 
   async #capture(opts: TraceOptions, plan: CapturePlan): Promise<CaptureResult> {
-    const { breakpoints = [], root, exprs = [], steps = [], frames = 6, maxHits = 25, attachTimeoutMs = 8000, sessionId } = opts;
+    const { breakpoints = [], root, exprs = [], steps = [], frames = 6, maxHits = 25, attachTimeoutMs = DEFAULT_ATTACH_TIMEOUT_MS, sessionId } = opts;
     const bps = BreakpointResolver.resolveAll(breakpoints, root);
     const result = plan.result;
     const driver = await CdpDriver.connect(opts.wsUrl || (await plan.resolveWs()), attachTimeoutMs);
@@ -131,9 +133,9 @@ export class Tracer {
     const capturer = new EventCapturer(driver);
     plan.attach(driver);
     try {
-      await driver.send("Runtime.enable");
-      await driver.send("Debugger.enable");
-      await driver.send("Debugger.setPauseOnExceptions", { state: "none" });
+      await driver.send(Cdp.Runtime.enable);
+      await driver.send(Cdp.Debugger.enable);
+      await driver.send(Cdp.Debugger.setPauseOnExceptions, { state: "none" });
       await plan.enableExtra(driver);
       await plan.arm(driver);
       await binder.tryBind(driver, sm);          // Node binds here; Chrome binds during instrumentation pumping
@@ -150,12 +152,12 @@ export class Tracer {
         if (plan.instrumentation && paused.reason === "instrumentation") {
           if (!binder.allSettled()) { await binder.tryBind(driver, sm); ctx.bpById = binder.bpById; }
           if (binder.allSettled() || plan.loaded()) await plan.removeInstr(driver);
-          await driver.send("Debugger.resume").catch(() => {});
+          await driver.send(Cdp.Debugger.resume).catch(() => {});
           continue;
         }
         result.events.push(await capturer.capture(paused, "breakpoint", ctx));
         await capturer.runSteps(ctx, plan.stepTimeoutMs);
-        await driver.send("Debugger.resume").catch(() => {});
+        await driver.send(Cdp.Debugger.resume).catch(() => {});
         if (plan.shouldStop(driver)) break;
       }
       await plan.drain();
@@ -166,8 +168,8 @@ export class Tracer {
       result.breakpoints = binder.report();
       for (const miss of binder.unbound()) log(`bp ${miss} → not bound (line not on this path / wrong route?)`);
       await plan.removeInstr(driver).catch(() => {});
-      for (const id of ctx.bpById.keys()) await driver.send("Debugger.removeBreakpoint", { breakpointId: id }).catch(() => {});
-      await driver.send("Debugger.resume").catch(() => {});
+      for (const id of ctx.bpById.keys()) await driver.send(Cdp.Debugger.removeBreakpoint, { breakpointId: id }).catch(() => {});
+      await driver.send(Cdp.Debugger.resume).catch(() => {});
       driver.close(); sm.dispose();
     }
     return result;
@@ -176,13 +178,13 @@ export class Tracer {
   // ---- targets: each builds a CapturePlan, then hands off to the shared loop --------------------
 
   async traceNode(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = 9229, curl, urlMatch, titleMatch, timeoutMs = 30000, reqTimeoutMs = 60000 } = opts;
-    const result: CaptureResult = { target: "node", trigger: curl ?? null, breakpoints: [], events: [] };
+    const { port = DEFAULT_NODE_PORT, curl, urlMatch, titleMatch, timeoutMs = 30000, reqTimeoutMs = 60000 } = opts;
+    const result: CaptureResult = { target: TargetKind.Node, trigger: curl ?? null, breakpoints: [], events: [] };
     let triggerDone = !curl;
     let triggerPromise: Promise<void> = Promise.resolve();
     const plan: CapturePlan = {
       result,
-      resolveWs: () => CdpDriver.resolveWsUrl(port, { kind: "node", urlMatch, titleMatch }),
+      resolveWs: () => CdpDriver.resolveWsUrl(port, { kind: TargetKind.Node, urlMatch, titleMatch }),
       enableExtra: async () => {},
       attach: () => {},
       arm: async (driver) => { await this.#settleScripts(driver); },
@@ -206,35 +208,35 @@ export class Tracer {
   }
 
   async traceChrome(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = 9222, url, urlMatch, timeoutMs = 15000, shot, record = false } = opts;
+    const { port = DEFAULT_CHROME_PORT, url, urlMatch, timeoutMs = 15000, shot, record = false } = opts;
     if (!url) throw new Error("traceChrome requires a page url");
-    const result: CaptureResult = { target: "chrome", trigger: url, breakpoints: [], events: [], console: [], network: [] };
+    const result: CaptureResult = { target: TargetKind.Chrome, trigger: url, breakpoints: [], events: [], console: [], network: [] };
     let loaded = false;
     let instrId: string | null = null;
     const plan: CapturePlan = {
       result,
-      resolveWs: () => CdpDriver.resolveWsUrl(port, { kind: "chrome", urlMatch: urlMatch || hostOf(url) }),
-      enableExtra: async (driver) => { await driver.send("Page.enable"); await driver.send("Network.enable"); },
+      resolveWs: () => CdpDriver.resolveWsUrl(port, { kind: TargetKind.Chrome, urlMatch: urlMatch || hostOf(url) }),
+      enableExtra: async (driver) => { await driver.send(Cdp.Page.enable); await driver.send(Cdp.Network.enable); },
       attach: (driver) => {
-        driver.on("Runtime.consoleAPICalled", (p: any) => { if (["error", "warning"].includes(p.type)) result.console!.push({ type: p.type, text: (p.args || []).map((a: any) => a.value ?? a.description ?? a.type).join(" ").slice(0, 300) }); });
-        driver.on("Runtime.exceptionThrown", (p: any) => result.console!.push({ type: "exception", text: String(p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || "").split("\n")[0].slice(0, 300) }));
-        driver.on("Network.responseReceived", (p: any) => { const r = p.response; if (r && r.status >= 400) result.network!.push({ status: r.status, url: r.url }); });
-        driver.on("Page.loadEventFired", () => { loaded = true; driver.interrupt(); });
+        driver.on(Cdp.Runtime.consoleAPICalled, (p: any) => { if (["error", "warning"].includes(p.type)) result.console!.push({ type: p.type, text: (p.args || []).map((a: any) => a.value ?? a.description ?? a.type).join(" ").slice(0, 300) }); });
+        driver.on(Cdp.Runtime.exceptionThrown, (p: any) => result.console!.push({ type: "exception", text: String(p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || "").split("\n")[0].slice(0, 300) }));
+        driver.on(Cdp.Network.responseReceived, (p: any) => { const r = p.response; if (r && r.status >= 400) result.network!.push({ status: r.status, url: r.url }); });
+        driver.on(Cdp.Page.loadEventFired, () => { loaded = true; driver.interrupt(); });
       },
-      arm: async (driver) => { const r = await driver.send("Debugger.setInstrumentationBreakpoint", { instrumentation: "beforeScriptExecution" }); instrId = r?.breakpointId ?? null; },
+      arm: async (driver) => { const r = await driver.send(Cdp.Debugger.setInstrumentationBreakpoint, { instrumentation: "beforeScriptExecution" }); instrId = r?.breakpointId ?? null; },
       instrumentation: true,
       loaded: () => loaded,
-      fire: (driver, ctx) => { ctx.t0 = performance.now(); log(`navigating ${url} (trigger)`); driver.send("Page.navigate", { url }).catch(() => {}); },
+      fire: (driver, ctx) => { ctx.t0 = performance.now(); log(`navigating ${url} (trigger)`); driver.send(Cdp.Page.navigate, { url }).catch(() => {}); },
       timeout: () => (loaded ? 1500 : timeoutMs),
       stepTimeoutMs: timeoutMs,
       stopOnInterrupt: false,
       shouldStop: () => false,
-      removeInstr: async (driver) => { if (instrId) { const id = instrId; instrId = null; await driver.send("Debugger.removeBreakpoint", { breakpointId: id }).catch(() => {}); } },
+      removeInstr: async (driver) => { if (instrId) { const id = instrId; instrId = null; await driver.send(Cdp.Debugger.removeBreakpoint, { breakpointId: id }).catch(() => {}); } },
       drain: async () => {},
       finish: async (driver) => {
-        await driver.send("Debugger.resume").catch(() => {});
+        await driver.send(Cdp.Debugger.resume).catch(() => {});
         await sleep(1500);
-        try { const u = await driver.send("Runtime.evaluate", { expression: "location.href", returnByValue: true }); result.finalUrl = u.result?.value; } catch { /* ignore */ }
+        try { const u = await driver.send(Cdp.Runtime.evaluate, { expression: "location.href", returnByValue: true }); result.finalUrl = u.result?.value; } catch { /* ignore */ }
         if (shot || record) {
           const data = await this.#snap(driver);
           if (data) { if (record) result.finalShot = data; if (shot) { (await import("node:fs")).writeFileSync(shot, Buffer.from(data, "base64")); result.screenshot = shot; } }

@@ -39,8 +39,9 @@ shell around it, not rewrite it.
 
 ## 2. Target CLI surface
 
-Root command gains subcommands; **the existing flat interface is preserved as the default command** so the
-published plugin/skill and any existing consumers keep working unchanged.
+Root command gains subcommands. *(Proposed at the time: keep the existing flat interface as the default
+command for back-compat. This is **not** what shipped — see §"CLI hard-cut" below: the flat
+`trace --port/--chrome` interface was removed in 0.3.0 in favour of `trace-cli dynamic --node|--chrome`.)*
 
 ```
 trace dynamic   ...        # today's engine: breakpoints + trigger → hits (Node or Chrome)
@@ -52,9 +53,9 @@ trace correlate ...        # cross-tier frontend↔backend span graph
 trace doctor               # report which backing tools are installed (+ versions)
 trace schema               # print the JSON Schema (the contract)
 
-# Backward-compat (unchanged, == `trace dynamic`):
-trace --port 9229 --curl '…' --bp file:line …
-trace --chrome 9222 --url … --bp file:line --record out.mp4 …
+# REMOVED in 0.3.0 — the flat interface no longer exists. Use `trace-cli dynamic …` instead:
+#   trace-cli dynamic --node 9229   --curl '…' --bp file:line …
+#   trace-cli dynamic --chrome 9222 --url …     --bp file:line --record out.mp4 …
 ```
 
 `stdout` = the JSON envelope (or the human render). `stderr` = `[trace]` logs. Exit codes unchanged

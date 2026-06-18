@@ -9,10 +9,11 @@ import { LineageAnalyzer } from "../../analysis/LineageAnalyzer.js";
 import { Trace, TraceMeta, TraceData, CurlResponse } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
 import { Recording } from "../../domain/Recording.js";
+import { TargetKind } from "../../domain/Target.js";
 import type { ArtifactStore } from "../../storage/ArtifactStore.js";
 import { VERSION } from "../../shared/version.js";
 
-export type DynamicTargetKind = "node" | "chrome";
+export type DynamicTargetKind = TargetKind;
 
 export interface DynamicRequest extends TraceOptions {
   target: DynamicTargetKind;
@@ -39,12 +40,12 @@ export class DynamicCommand {
     const opts: TraceOptions = { ...req, sessionId, record: req.record };
 
     const capture =
-      req.target === "chrome" ? await this.tracer.traceChrome(opts)
+      req.target === TargetKind.Chrome ? await this.tracer.traceChrome(opts)
       : await this.tracer.traceNode(opts);
 
     const trace = this.#toTrace(capture, { sessionId, args: req.args ?? {}, startedAtMs });
 
-    if (req.target === "chrome" && req.record !== false) {
+    if (req.target === TargetKind.Chrome && req.record !== false) {
       await this.#record(capture, trace, sessionId, req.recordOut);
     }
     return { trace, capture };

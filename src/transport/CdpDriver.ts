@@ -1,6 +1,9 @@
 import CDP from "chrome-remote-interface";
 import type { ProtocolDriver } from "./ProtocolDriver.js";
+import { Cdp } from "./cdp.js";
+import { TargetKind, TARGET_LABEL } from "../domain/Target.js";
 import { withDeadline } from "../shared/deadline.js";
+import { DEFAULT_ATTACH_TIMEOUT_MS } from "../shared/defaults.js";
 
 export const log = (...a: unknown[]) => console.error("[trace]", ...a);
 
@@ -20,14 +23,14 @@ export class CdpDriver implements ProtocolDriver {
 
   private constructor(client: any) {
     this.#client = client;
-    client.on("Debugger.scriptParsed", (p: ScriptInfo) => { if (p?.url) this.#scripts.set(p.scriptId, p); });
-    client.on("Debugger.paused", (p: any) => {
+    client.on(Cdp.Debugger.scriptParsed, (p: ScriptInfo) => { if (p?.url) this.#scripts.set(p.scriptId, p); });
+    client.on(Cdp.Debugger.paused, (p: any) => {
       if (this.#pausedWaiter) { const w = this.#pausedWaiter; this.#pausedWaiter = null; w(p); }
       else this.#pausedQueue.push(p);
     });
   }
 
-  static async connect(wsUrl: string, timeoutMs = 8000): Promise<CdpDriver> {
+  static async connect(wsUrl: string, timeoutMs = DEFAULT_ATTACH_TIMEOUT_MS): Promise<CdpDriver> {
     let client: any;
     try {
       client = await withDeadline(CDP({ target: wsUrl, local: true }), timeoutMs, () =>
@@ -56,9 +59,9 @@ export class CdpDriver implements ProtocolDriver {
   scripts(): Map<string, ScriptInfo> { return this.#scripts; }
 
   // --- target discovery (custom; environment-specific — libraries can't generalize this) ---
-  static async listTargets(port: number, kind: "node" | "chrome", timeoutMs = 4000): Promise<any[]> {
-    const route = kind === "chrome" ? "json" : "json/list";
-    const where = kind === "chrome" ? "Chrome --remote-debugging-port" : "Node --inspect";
+  static async listTargets(port: number, kind: TargetKind, timeoutMs = 4000): Promise<any[]> {
+    const route = kind === TargetKind.Chrome ? "json" : "json/list";
+    const where = TARGET_LABEL[kind];
     let res: Response;
     try { res = await fetch(`http://localhost:${port}/${route}`, { signal: AbortSignal.timeout(timeoutMs) }); }
     catch (e: any) {
@@ -70,18 +73,18 @@ export class CdpDriver implements ProtocolDriver {
 
   static async resolveWsUrl(
     port: number,
-    opts: { kind?: "node" | "chrome"; urlMatch?: string; titleMatch?: string } = {},
+    opts: { kind?: TargetKind; urlMatch?: string; titleMatch?: string } = {},
   ): Promise<string> {
-    const { kind = "node", urlMatch, titleMatch } = opts;
+    const { kind = TargetKind.Node, urlMatch, titleMatch } = opts;
     const list = await CdpDriver.listTargets(port, kind);
     let candidates = Array.isArray(list) ? list : [];
-    if (kind === "chrome") candidates = candidates.filter((t) => t.type === "page" && t.webSocketDebuggerUrl);
+    if (kind === TargetKind.Chrome) candidates = candidates.filter((t) => t.type === "page" && t.webSocketDebuggerUrl);
     let t: any;
     if (urlMatch) t = candidates.find((x) => (x.url || "").includes(urlMatch));
     if (!t && titleMatch) t = candidates.find((x) => (x.title || "").includes(titleMatch));
     t = t || candidates.find((x) => x.webSocketDebuggerUrl) || candidates[0];
     if (!t?.webSocketDebuggerUrl) {
-      throw new Error(`no debuggable target on :${port} — is the ${kind === "chrome" ? "Chrome --remote-debugging-port" : "Node --inspect"} up?`);
+      throw new Error(`no debuggable target on :${port} — is the ${TARGET_LABEL[kind]} up?`);
     }
     return t.webSocketDebuggerUrl as string;
   }

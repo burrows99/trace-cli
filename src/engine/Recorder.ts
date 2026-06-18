@@ -1,8 +1,10 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CdpDriver } from "../transport/CdpDriver.js";
+import { Cdp } from "../transport/cdp.js";
+import { ffmpeg, concatInput, h264Mp4, FRAMES_LIST_FILE } from "./ffmpeg.js";
 import type { CaptureResult } from "./Tracer.js";
 import type { TraceEvent } from "../domain/TraceEvent.js";
 import { sleep } from "../shared/sleep.js";
@@ -88,12 +90,6 @@ export class Recorder {
 <div class=title>${esc(title)}</div>`;
   }
 
-  static #ffmpeg(args: string[]): Promise<void> {
-    return new Promise((res, rej) => {
-      execFile("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args], (err: any, _o, stderr) => (err ? rej(new Error(stderr || err.message)) : res()));
-    });
-  }
-
   static async #launchRenderChrome(): Promise<{ port: number; kill(): void }> {
     const bin = CHROME_CANDIDATES.find((p) => existsSync(p));
     if (!bin) throw new Error("no Chrome found for frame rendering (set CHROME_BIN)");
@@ -105,9 +101,9 @@ export class Recorder {
   }
 
   static async #renderFrame(driver: CdpDriver, html: string, out: string): Promise<void> {
-    await driver.send("Page.navigate", { url: "data:text/html;base64," + Buffer.from(html).toString("base64") });
+    await driver.send(Cdp.Page.navigate, { url: "data:text/html;base64," + Buffer.from(html).toString("base64") });
     await sleep(280);
-    const s = await driver.send("Page.captureScreenshot", { format: "png" });
+    const s = await driver.send(Cdp.Page.captureScreenshot, { format: "png" });
     writeFileSync(out, Buffer.from(s.data, "base64"));
   }
 
@@ -122,15 +118,75 @@ export class Recorder {
       const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl) || targets[0];
       if (!page?.webSocketDebuggerUrl) throw new Error("render Chrome exposed no page target");
       driver = await CdpDriver.connect(page.webSocketDebuggerUrl);
-      await driver.send("Page.enable");
-      await driver.send("Emulation.setDeviceMetricsOverride", { width: OW, height: OH, deviceScaleFactor: 1, mobile: false });
+      await driver.send(Cdp.Page.enable);
+      await driver.send(Cdp.Emulation.setDeviceMetricsOverride, { width: OW, height: OH, deviceScaleFactor: 1, mobile: false });
       const frames: string[] = [];
       if (title) { const f = join(dir, "frame_0.png"); await Recorder.#renderFrame(driver, Recorder.#titleHtml(title), f); frames.push(f); }
       let i = 1;
       for (const e of result.events) { const f = join(dir, `frame_${i}.png`); await Recorder.#renderFrame(driver, Recorder.#frameHtml(result, e), f); frames.push(f); i++; }
-      const listFile = join(dir, "frames.txt");
+      const listFile = join(dir, FRAMES_LIST_FILE);
       writeFileSync(listFile, Recorder.concatList(frames, stepSecs, title ? titleSecs : 0));
-      await Recorder.#ffmpeg(["-f", "concat", "-safe", "0", "-i", listFile, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out]);
+      await ffmpeg([...concatInput(listFile), ...h264Mp4({ pixFmt: "yuv420p" }), out]);
+      return out;
+    } finally {
+      try { driver?.close(); } catch { /* ignore */ }
+      chrome.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  /** One journey frame: the live screencast image on the left, the active breakpoint's panel on the right. */
+  static #journeyFrameHtml(frameB64: string, e: TraceEvent | null): string {
+    const left = `<img class=app src="data:image/jpeg;base64,${frameB64}">`;
+    if (!e) return `<!doctype html><meta charset=utf8><style>${STYLE}</style><div class=root><div class=row><div class=left>${left}</div><div class=panel><div class=sec>trace</div><div class=fr>watching for breakpoint hits…</div></div></div><div class=cap>journey — screen + live trace</div></div>`;
+    const a = attrsOf(e);
+    const stack = (a.stack || []).map((f) => `<div class=fr>${esc(f)}</div>`).join("");
+    const locals = Object.entries(a.locals || {}).map(([k, v]) => `<div class=kv><span class=k>${esc(k)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
+    const exprs = Object.entries(a.exprs || {}).map(([ex, v]) => `<div class="kv expr">⊢ <span class=k>${esc(ex)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
+    return `<!doctype html><meta charset=utf8><style>${STYLE}</style><div class=root>
+      <div class=row><div class=left>${left}</div><div class=panel>
+        <div class=hdr>#${e.seq} &nbsp; +${e.t}ms</div>
+        <div class=loc>${esc((a.cls ? a.cls + "." : "") + e.label)} &nbsp;@ ${esc(locStr(e))}</div>
+        <div class=sec>stack</div>${stack}
+        ${locals ? `<div class=sec>locals</div>${locals}` : ""}
+        ${exprs ? `<div class=sec>watch</div>${exprs}` : ""}
+      </div></div>
+      <div class=cap>${esc(Recorder.#caption(e))}</div>
+    </div>`;
+  }
+
+  /**
+   * Compose a side-by-side journey clip: the motion screencast on the left, and beside each moment the most
+   * recent breakpoint hit (matched by wall-clock time). Frames are downsampled to keep the render bounded.
+   */
+  static async renderJourney(frames: { data: Buffer; t: number }[], traced: { ev: TraceEvent; t: number }[], out: string): Promise<string | null> {
+    if (frames.length < 2) return null;
+    const MAX = 160;
+    const pick = frames.length > MAX ? Array.from({ length: MAX }, (_, i) => frames[Math.floor(i * (frames.length / MAX))]) : frames;
+    const dir = mkdtempSync(join(tmpdir(), "trace-journey-"));
+    const chrome = await Recorder.#launchRenderChrome();
+    let driver: CdpDriver | undefined;
+    try {
+      const targets = await (await fetch(`http://localhost:${chrome.port}/json`)).json() as any[];
+      const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl) || targets[0];
+      if (!page?.webSocketDebuggerUrl) throw new Error("render Chrome exposed no page target");
+      driver = await CdpDriver.connect(page.webSocketDebuggerUrl);
+      await driver.send(Cdp.Page.enable);
+      await driver.send(Cdp.Emulation.setDeviceMetricsOverride, { width: OW, height: OH, deviceScaleFactor: 1, mobile: false });
+      const files: string[] = [];
+      for (let i = 0; i < pick.length; i++) {
+        const f = pick[i];
+        const active = [...traced].reverse().find((h) => h.t <= f.t)?.ev ?? null;
+        const file = join(dir, `f${String(i).padStart(5, "0")}.png`);
+        await Recorder.#renderFrame(driver, Recorder.#journeyFrameHtml(f.data.toString("base64"), active), file);
+        files.push(file);
+      }
+      const lines: string[] = [];
+      pick.forEach((f, i) => { const next = pick[i + 1]; const dur = next ? Math.min(2, Math.max(0.05, (next.t - f.t) / 1000)) : 1.5; lines.push(`file '${files[i]}'`, `duration ${dur.toFixed(3)}`); });
+      lines.push(`file '${files[files.length - 1]}'`);
+      const listFile = join(dir, FRAMES_LIST_FILE);
+      writeFileSync(listFile, lines.join("\n") + "\n");
+      await ffmpeg([...concatInput(listFile), ...h264Mp4({ pixFmt: "yuv420p" }), out]);
       return out;
     } finally {
       try { driver?.close(); } catch { /* ignore */ }

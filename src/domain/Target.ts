@@ -3,8 +3,17 @@
  * language target is a new subclass, not a change to existing code. Each knows its protocol (`source`) and
  * its trigger, and serializes to a TargetRef for the envelope (Liskov: all subclasses are substitutable).
  */
-export type TargetKind = "node" | "chrome";
+import { DEFAULT_NODE_PORT, DEFAULT_CHROME_PORT } from "../shared/defaults.js";
+
+export const TargetKind = { Node: "node", Chrome: "chrome" } as const;
+export type TargetKind = (typeof TargetKind)[keyof typeof TargetKind];
 export type ProtocolKind = "cdp";
+
+/** Human label for the inspector each target kind expects to be listening — used in connection errors. */
+export const TARGET_LABEL: Record<TargetKind, string> = {
+  node: "Node --inspect",
+  chrome: "Chrome --remote-debugging-port",
+};
 
 export interface TargetRef {
   kind: TargetKind;
@@ -24,10 +33,10 @@ export abstract class Target {
 }
 
 export class NodeTarget extends Target {
-  override readonly kind = "node" as const;
+  override readonly kind = TargetKind.Node;
   override readonly source = "cdp" as const;
   constructor(
-    override readonly port = 9229,
+    override readonly port = DEFAULT_NODE_PORT,
     readonly curl?: string,
     readonly wsUrl?: string,
   ) { super(); }
@@ -35,10 +44,10 @@ export class NodeTarget extends Target {
 }
 
 export class ChromeTarget extends Target {
-  override readonly kind = "chrome" as const;
+  override readonly kind = TargetKind.Chrome;
   override readonly source = "cdp" as const;
   constructor(
-    override readonly port = 9222,
+    override readonly port = DEFAULT_CHROME_PORT,
     readonly url?: string,
     readonly wsUrl?: string,
   ) { super(); }
