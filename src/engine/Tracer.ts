@@ -162,8 +162,10 @@ export class Tracer {
     let stepResults: StepResult[] = [];
     let fatal: string | undefined;
     try {
-      // A leading `goto` navigates a fresh tab, so instrument it to bind before first-run/on-mount code runs.
-      await runner.start(urlMatch, parsed[0]?.action === "goto");
+      // Arm THE ONE PAUSE (bind-before-first-run, see TabTracer) only when the journey opens by navigating a
+      // fresh tab — a leading `goto` — so on-mount code is caught. Attach-then-click flows don't need it.
+      const bindBeforeFirstRun = parsed[0]?.action === "goto";
+      await runner.start(urlMatch, bindBeforeFirstRun);
       stepResults = await runner.run(parsed);
     } catch (e: any) {
       fatal = String(e?.message ?? e);

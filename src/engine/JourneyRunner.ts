@@ -80,7 +80,7 @@ export class JourneyRunner {
   }
 
   /** Connect to a target, enable its domains, and (when tracing) attach a TabTracer. */
-  async #connect(target: any, opts: { trace?: boolean; instrument?: boolean } = {}): Promise<CdpDriver> {
+  async #connect(target: any, opts: { trace?: boolean; bindBeforeFirstRun?: boolean } = {}): Promise<CdpDriver> {
     const d = await CdpDriver.connect(target.webSocketDebuggerUrl);
     await d.send(Cdp.Page.enable).catch(() => {});
     await d.send(Cdp.Runtime.enable).catch(() => {});
@@ -96,7 +96,7 @@ export class JourneyRunner {
     if (opts.trace && this.#trace) {
       const tracer = new TabTracer(d, this.#trace, this.traced);
       this.#tracers.set(d, tracer);
-      await tracer.arm(!!opts.instrument);
+      await tracer.arm(!!opts.bindBeforeFirstRun);
     }
     return d;
   }
@@ -109,13 +109,13 @@ export class JourneyRunner {
   }
 
   /**
-   * Attach to an existing page (or one matching `urlMatch`) and begin recording it. `instrumentFirst` arms a
-   * `beforeScriptExecution` pause on this tab so breakpoints bind *before* the upcoming navigation's scripts
-   * run — set it when the journey opens with a `goto`, so first-run / on-mount code (e.g. a SPA computing a
-   * value during initial render) is caught instead of missed. Left false for attach-then-click flows, where
-   * an instrumentation pause could disturb the user-gesture timing the handler depends on.
+   * Attach to an existing page (or one matching `urlMatch`) and begin recording it. `bindBeforeFirstRun` arms
+   * THE ONE PAUSE (see {@link TabTracer}) so breakpoints bind *before* the upcoming navigation's scripts run —
+   * set it when the journey opens with a `goto`, so first-run / on-mount code (e.g. a SPA computing a value
+   * during initial render) is caught instead of missed. Left false for an attach-then-click flow, where the
+   * tab is already live and its handlers fire later on a click.
    */
-  async start(urlMatch?: string, instrumentFirst = false): Promise<void> {
+  async start(urlMatch?: string, bindBeforeFirstRun = false): Promise<void> {
     let pages = await this.#pages();
     if (!pages.length) {
       // The debug Chrome is up but tabless (a prior run / the impersonation popup closed its tabs). Open a
@@ -129,20 +129,18 @@ export class JourneyRunner {
     }
     const target = (urlMatch && pages.find((p) => (p.url || "").includes(urlMatch))) || pages[0];
     for (const p of pages) this.#known.add(p.id); // everything open now is "known"; only future tabs count as new
-    // A leading `goto` navigates this tab, so instrument it to bind before first-run/on-mount code; an
-    // attach-then-click launcher tab (e.g. Pulse) stays uninstrumented — its handlers fire later, on click.
-    const d = await this.#connect(target, { trace: true, instrument: instrumentFirst });
+    const d = await this.#connect(target, { trace: true, bindBeforeFirstRun });
     this.#t0 = Date.now();
     await this.#switchTo(d);
   }
 
-  /** Poll for a freshly-opened tab (e.g. the impersonation popup), attach + instrument it, and follow it. */
+  /** Poll for a freshly-opened tab (e.g. the impersonation popup), attach (binding before its first run), and follow it. */
   async #waitNewTab(timeoutMs = 12000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const fresh = (await this.#pages()).find((p) => !this.#known.has(p.id));
       if (fresh) {
-        const d = await this.#connect(fresh, { trace: true, instrument: true }); // opened app tab — catch its first-run code
+        const d = await this.#connect(fresh, { trace: true, bindBeforeFirstRun: true }); // opened app tab — bind before its first-run code
         await sleep(300);
         await this.#switchTo(d);
         return true;
