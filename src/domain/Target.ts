@@ -1,7 +1,7 @@
 /**
  * Target — what we attach to. An abstract entity with concrete subclasses (Open/Closed): adding a new
  * language target is a new subclass, not a change to existing code. Each knows its protocol (`source`) and
- * its trigger, and serializes to a TargetRef for the envelope (Liskov: all subclasses are substitutable).
+ * its trigger, and serializes to a TargetReference for the envelope (Liskov: all subclasses are substitutable).
  */
 import { IsIn, IsOptional, IsString } from "class-validator";
 import { DEFAULT_NODE_PORT, DEFAULT_CHROME_PORT } from "../shared/defaults.js";
@@ -18,16 +18,16 @@ export const TARGET_LABEL: Record<TargetKind, string> = {
 };
 
 /**
- * TargetRef — the serialized, validated shape of a Target on the envelope. A class (not a bare interface) so
+ * TargetReference — the serialized, validated shape of a Target on the envelope. A class (not a bare interface) so
  * `Trace.target` can be checked with @ValidateNested: `kind` must be a known target, `source` a known protocol,
  * `trigger` a string or null.
  */
-export class TargetRef {
+export class TargetReference {
   @IsIn(Object.values(TargetKind)) kind: TargetKind;
   @IsIn(PROTOCOL_KINDS as unknown as string[]) source: ProtocolKind;
   @IsOptional() @IsString() trigger: string | null;
 
-  constructor(init: Partial<TargetRef> = {}) {
+  constructor(init: Partial<TargetReference> = {}) {
     this.kind = init.kind ?? TargetKind.Node;
     this.source = init.source ?? "cdp";
     this.trigger = init.trigger ?? null;
@@ -40,8 +40,8 @@ export abstract class Target {
   abstract readonly port: number;
   abstract get trigger(): string | null;
 
-  toRef(): TargetRef {
-    return new TargetRef({ kind: this.kind, source: this.source, trigger: this.trigger });
+  toReference(): TargetReference {
+    return new TargetReference({ kind: this.kind, source: this.source, trigger: this.trigger });
   }
 }
 

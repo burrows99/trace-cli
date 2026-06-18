@@ -1,6 +1,6 @@
 ---
 name: trace
-description: Gets a full execution trace through a running app via the `trace-cli` CLI — sets breakpoints at file:line, fires a trigger (a curl for a Node `--inspect` backend, or a scripted UI journey of ordered steps for a Chrome `--remote-debugging-port` target, attached or auto-launched headless), and reads back every hit with its call stack, locals, watched expressions and timing as one JSON envelope; a Chrome run also records a screen + trace-panel video. Node/Chrome over CDP. Also `trace-cli static` runs static analysis with no running app — call graph (LSP call hierarchy), module deps, complexity, symbols. Use for: trace this request/route, what runs when I hit /endpoint, record this UI flow, show the call graph / what calls what, module or circular dependencies, cyclomatic complexity, symbol outline of a file, step through a function, why is this value X here, set a breakpoint and show the trace. Vendor-neutral: pass the port, trigger and breakpoints — nothing is hardcoded.
+description: Gets a full execution trace through a running app via the `trace-cli` CLI — sets breakpoints at file:line, fires a trigger (a curl for a Node `--inspect` backend, or a scripted UI journey of ordered steps for a Chrome `--remote-debugging-port` target, attached or auto-launched headless), and reads back every hit with its call stack, locals, watched expressions and timing as one JSON envelope; a Chrome run also records a screen + trace-panel video. Node/Chrome over CDP. Also `trace-cli graph`/`deps`/`complexity`/`symbols` run static analysis with no running app — call graph (LSP call hierarchy), module deps, complexity, symbols. Use for: trace this request/route, what runs when I hit /endpoint, record this UI flow, show the call graph / what calls what, module or circular dependencies, cyclomatic complexity, symbol outline of a file, step through a function, why is this value X here, set a breakpoint and show the trace. Vendor-neutral: pass the port, trigger and breakpoints — nothing is hardcoded.
 allowed-tools: Bash(node:*), Bash(trace-cli:*), Read
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Bash(node:*), Bash(trace-cli:*), Read
 
 - Attaches to a running debug target, sets breakpoints, fires a trigger, prints the full execution trace in one shot. One engine, one protocol driver — **CDP** for Node and Chrome. You read the trace; you never drive the debugger by hand.
 - **Chrome can auto-launch:** `--chrome <port>` attaches to a browser you started (a real, logged-in session); bare `--chrome` (no port) launches a throwaway headless Chrome, traces, records, and tears it down — a frontend trace needs only the app running.
-- **`trace-cli static` needs no running app:** `graph` is a call graph (flow tree) via **LSP call hierarchy** — map what a route/function calls, and find breakpoint coordinates before a dynamic trace. TS/JS bundled; other languages via `--server` (`gopls` · `pyright --stdio` · `rust-analyzer` · `clangd`, must expose `callHierarchyProvider`). The group also has `deps`/`complexity`/`symbols` — run `trace-cli static --help`.
+- **Static analysis needs no running app:** `trace-cli graph` is a call graph (flow tree) via **LSP call hierarchy** — map what a route/function calls, and find breakpoint coordinates before a runtime trace. TS/JS bundled; other languages via `--server` (`gopls` · `pyright --stdio` · `rust-analyzer` · `clangd`, must expose `callHierarchyProvider`). The other analyses are `deps`/`complexity`/`symbols` — run `trace-cli --help`.
 
 ## Invoking (do this first)
 
@@ -28,7 +28,7 @@ trace-cli() { node "${CLAUDE_PLUGIN_ROOT}/bin/trace" "$@"; }
 ```bash
 trace-cli manifest          # structured JSON: every command, flag (defaults/choices/env vars) & argument — the input contract
 trace-cli --help            # the list of subcommands
-trace-cli <command> --help  # how to run one command, e.g. `trace-cli dynamic --help`
+trace-cli <command> --help  # how to run one command, e.g. `trace-cli run --help`
 trace-cli schema            # the output JSON Schema every trace conforms to — the output contract
 trace-cli doctor            # which backing tools are installed (node, chrome, ffmpeg, …)
 ```

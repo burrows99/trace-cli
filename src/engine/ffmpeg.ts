@@ -13,16 +13,16 @@ export const FRAMES_LIST_FILE = "frames.txt";
 export const concatInput = (listFile: string): string[] => ["-f", "concat", "-safe", "0", "-i", listFile];
 
 /** H.264 mp4 output args (30fps, web-friendly faststart). Pass `pixFmt` to force a pixel format. */
-export const h264Mp4 = (opts: { pixFmt?: string } = {}): string[] => [
+export const h264Mp4 = (options: { pixFmt?: string } = {}): string[] => [
   "-r", "30", "-c:v", "libx264",
-  ...(opts.pixFmt ? ["-pix_fmt", opts.pixFmt] : []),
+  ...(options.pixFmt ? ["-pix_fmt", options.pixFmt] : []),
   "-movflags", "+faststart",
 ];
 
 /** Run ffmpeg with quiet global flags (`-y -hide_banner -loglevel error`); rejects with stderr on failure. */
 export function ffmpeg(args: string[]): Promise<void> {
-  return new Promise((res, rej) => {
-    execFile("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args], (err: any, _o, stderr) =>
-      err ? rej(new Error(stderr || err.message)) : res());
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", ...args], (error: any, _stdout, stderr) =>
+      error ? reject(new Error(stderr || error.message)) : resolve());
   });
 }

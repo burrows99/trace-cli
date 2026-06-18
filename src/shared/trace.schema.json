@@ -11,7 +11,7 @@
     "version": { "type": "string" },
     "command": {
       "type": "string",
-      "description": "dotted command id, e.g. dynamic.node, static.complexity, exec, web, correlate"
+      "description": "dotted command id, e.g. run.node, graph.lsp, complexity.lizard, exec, web, correlate"
     },
     "ok": { "type": "boolean" },
     "meta": {
@@ -44,16 +44,16 @@
     }
   },
   "$defs": {
-    "Loc": {
+    "SourceLocation": {
       "type": "object",
       "required": ["file"],
       "properties": {
         "file": { "type": "string" },
         "line": { "type": "integer" },
-        "col": { "type": "integer" },
+        "column": { "type": "integer" },
         "endLine": { "type": "integer" },
         "symbol": { "type": "string" },
-        "lang": { "type": "string" }
+        "language": { "type": "string" }
       }
     },
     "Metric": {
@@ -72,7 +72,7 @@
         "id": { "type": "string" },
         "name": { "type": "string" },
         "kind": { "type": "string" },
-        "loc": { "$ref": "#/$defs/Loc" },
+        "location": { "$ref": "#/$defs/SourceLocation" },
         "signature": { "type": "string" },
         "metrics": { "type": "array", "items": { "$ref": "#/$defs/Metric" } }
       }
@@ -90,7 +90,7 @@
               "id": { "type": "string" },
               "kind": { "type": "string" },
               "label": { "type": "string" },
-              "loc": { "$ref": "#/$defs/Loc" }
+              "location": { "$ref": "#/$defs/SourceLocation" }
             }
           }
         },
@@ -114,14 +114,14 @@
       "required": ["seq", "kind"],
       "description": "the timeline primitive: a breakpoint hit, a span, or a UI action",
       "properties": {
-        "seq": { "type": "integer" },
-        "t": { "type": ["number", "string"], "description": "elapsed ms or ISO timestamp" },
+        "sequence": { "type": "integer" },
+        "time": { "type": ["number", "string"], "description": "elapsed ms or ISO timestamp" },
         "kind": { "type": "string" },
         "label": { "type": "string" },
         "source": { "enum": ["cdp", "terminal", "otel"], "description": "the collector that produced this event" },
         "sessionId": { "type": "string", "description": "groups events of one run; shared across collectors for correlation" },
-        "loc": { "$ref": "#/$defs/Loc" },
-        "attrs": { "type": "object" },
+        "location": { "$ref": "#/$defs/SourceLocation" },
+        "attributes": { "type": "object" },
         "traceId": { "type": "string" },
         "spanId": { "type": "string" },
         "parentSpanId": { "type": "string" }
@@ -142,9 +142,9 @@
             "type": "object",
             "required": ["seq", "value"],
             "properties": {
-              "seq": { "type": "integer" },
-              "t": { "type": ["number", "string"] },
-              "loc": { "$ref": "#/$defs/Loc" },
+              "sequence": { "type": "integer" },
+              "time": { "type": ["number", "string"] },
+              "location": { "$ref": "#/$defs/SourceLocation" },
               "value": {},
               "changed": { "type": "boolean" }
             }

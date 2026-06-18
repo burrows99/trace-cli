@@ -19,7 +19,7 @@ const MAX_PORT = 65535;
  */
 export class StepInput {
   @IsIn(STEP_ACTIONS as unknown as string[]) action!: string;
-  @ValidateIf((o) => STEP_ACTIONS_NEEDING_ARG.has(o.action)) @IsNotEmpty() arg?: string;
+  @ValidateIf((input) => STEP_ACTIONS_NEEDING_ARG.has(input.action)) @IsNotEmpty() arg?: string;
   @IsOptional() @IsString() value?: string;
 
   constructor(init: Partial<StepInput> = {}) { Object.assign(this, init); }
@@ -31,22 +31,22 @@ export class StepInput {
  * Validate every `--step` string against the vocabulary. Returns [] when all valid, else one line per problem
  * prefixed with the step's index + action — never the raw value, which may carry a typed credential.
  */
-export function validateSteps(raw: string[]): string[] {
-  const errs: string[] = [];
-  raw.forEach((s, i) => {
-    const step = parseStep(s);
-    const at = `step #${i + 1} (${step.action || "?"})`;
-    for (const m of new StepInput(step).validate()) errs.push(`${at}: ${m}`);
-    if (step.action === "wait" && step.arg && !/^\d+$/.test(step.arg)) errs.push(`${at}: wait arg must be milliseconds (a positive integer)`);
+export function validateSteps(rawSteps: string[]): string[] {
+  const errors: string[] = [];
+  rawSteps.forEach((stepString, index) => {
+    const step = parseStep(stepString);
+    const label = `step #${index + 1} (${step.action || "?"})`;
+    for (const message of new StepInput(step).validate()) errors.push(`${label}: ${message}`);
+    if (step.action === "wait" && step.arg && !/^\d+$/.test(step.arg)) errors.push(`${label}: wait arg must be milliseconds (a positive integer)`);
   });
-  return errs;
+  return errors;
 }
 
-/** Input contract for `trace-cli dynamic`. */
+/** Input contract for `trace-cli run`. */
 export class DynamicInput {
   @IsIn(Object.values(TargetKind)) target: TargetKind;
   // In Chrome launch mode the port isn't known until the browser is spawned, so only range-check a real port.
-  @ValidateIf((o) => !o.launch) @IsInt() @Min(1) @Max(MAX_PORT) port: number;
+  @ValidateIf((input) => !input.launch) @IsInt() @Min(1) @Max(MAX_PORT) port: number;
   @IsOptional() @IsBoolean() launch?: boolean;
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) breakpoints: string[];
   @IsArray() @IsString({ each: true }) exprs: string[];
@@ -64,11 +64,11 @@ export class DynamicInput {
   validate(): string[] { return validateStrict(this); }
 }
 
-/** Input contract for `trace-cli graph`. Requires a file plus an anchor: a line (optional col) or a symbol. */
+/** Input contract for `trace-cli graph`. Requires a file plus an anchor: a line (optional column) or a symbol. */
 export class GraphInput {
   @IsString() file: string;
-  @ValidateIf((o) => o.symbol === undefined) @IsInt() @Min(1) line?: number;
-  @IsOptional() @IsInt() @Min(1) col?: number;
+  @ValidateIf((input) => input.symbol === undefined) @IsInt() @Min(1) line?: number;
+  @IsOptional() @IsInt() @Min(1) column?: number;
   @IsOptional() @IsString() symbol?: string;
   @IsOptional() @IsString() server?: string;
   @IsOptional() @IsInt() @Min(1) depth?: number;

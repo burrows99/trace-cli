@@ -8,15 +8,15 @@ import { ffmpeg, concatInput, h264Mp4, FRAMES_LIST_FILE } from "./ffmpeg.js";
 import type { TraceEvent } from "../domain/TraceEvent.js";
 import { sleep } from "../shared/sleep.js";
 
-const OW = 1360, OH = 860;
+const OUTPUT_WIDTH = 1360, OUTPUT_HEIGHT = 860;
 
-const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const oneLine = (v: unknown) => { const s = typeof v === "string" ? v : JSON.stringify(v); return (s == null ? String(v) : s).replace(/\s+/g, " ").slice(0, 240); };
-const locStr = (e: TraceEvent) => (e.loc ? `${e.loc.file}:${e.loc.line ?? ""}` : "");
-const attrsOf = (e: TraceEvent) => (e.attrs ?? {}) as { cls?: string; stack?: string[]; locals?: Record<string, unknown>; exprs?: Record<string, unknown> };
+const escapeHtml = (value: unknown) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const oneLine = (value: unknown) => { const serialized = typeof value === "string" ? value : JSON.stringify(value); return (serialized == null ? String(value) : serialized).replace(/\s+/g, " ").slice(0, 240); };
+const locStr = (event: TraceEvent) => (event.location ? `${event.location.file}:${event.location.line ?? ""}` : "");
+const attrsOf = (event: TraceEvent) => (event.attributes ?? {}) as { cls?: string; stack?: string[]; locals?: Record<string, unknown>; exprs?: Record<string, unknown> };
 
 const STYLE = `*{margin:0;box-sizing:border-box}
-html,body{width:${OW}px;height:${OH}px;background:#0b1220;color:#e6edf3;font:14px/1.55 ui-monospace,Menlo,Consolas,monospace;overflow:hidden}
+html,body{width:${OUTPUT_WIDTH}px;height:${OUTPUT_HEIGHT}px;background:#0b1220;color:#e6edf3;font:14px/1.55 ui-monospace,Menlo,Consolas,monospace;overflow:hidden}
 .root{display:flex;flex-direction:column;height:100%}
 .row{display:flex;flex:1;min-height:0}
 .left{width:46%;background:#06080f;display:flex;align-items:center;justify-content:center;border-right:2px solid #1b2740;overflow:hidden}
@@ -24,7 +24,7 @@ html,body{width:${OW}px;height:${OH}px;background:#0b1220;color:#e6edf3;font:14p
 .req{align-self:stretch;width:100%;padding:20px;overflow:hidden}
 .panel{flex:1;padding:18px 22px;overflow:hidden}
 .hdr{font-size:19px;font-weight:700;color:#7ee787}
-.loc{color:#79c0ff;margin-bottom:10px}
+.location{color:#79c0ff;margin-bottom:10px}
 .sec{color:#8b949e;margin:12px 0 4px;text-transform:uppercase;font-size:11px;letter-spacing:.06em}
 .fr{color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kv{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -39,35 +39,35 @@ pre{white-space:pre-wrap;word-break:break-all;color:#9de0ad;font-size:12px}`;
  * then stitched with ffmpeg. Drives both `dynamic --record` and `journey` via `renderJourney`.
  */
 export class Recorder {
-  static #caption(e: TraceEvent): string {
-    const a = attrsOf(e);
-    return `#${e.seq}  ${a.cls ? a.cls + "." : ""}${e.label}  ${locStr(e)}${String(e.kind).startsWith("step") ? "  [" + e.kind + "]" : ""}`;
+  static #caption(event: TraceEvent): string {
+    const attributes = attrsOf(event);
+    return `#${event.sequence}  ${attributes.cls ? attributes.cls + "." : ""}${event.label}  ${locStr(event)}${String(event.kind).startsWith("step") ? "  [" + event.kind + "]" : ""}`;
   }
 
-  static async #renderFrame(driver: CdpDriver, html: string, out: string): Promise<void> {
+  static async #renderFrame(driver: CdpDriver, html: string, outputPath: string): Promise<void> {
     await driver.send(Cdp.Page.navigate, { url: "data:text/html;base64," + Buffer.from(html).toString("base64") });
     await sleep(280);
-    const s = await driver.send(Cdp.Page.captureScreenshot, { format: "png" });
-    writeFileSync(out, Buffer.from(s.data, "base64"));
+    const screenshot = await driver.send(Cdp.Page.captureScreenshot, { format: "png" });
+    writeFileSync(outputPath, Buffer.from(screenshot.data, "base64"));
   }
 
   /** One journey frame: the live screencast image on the left, the active breakpoint's panel on the right. */
-  static #journeyFrameHtml(frameB64: string, e: TraceEvent | null): string {
+  static #journeyFrameHtml(frameB64: string, event: TraceEvent | null): string {
     const left = `<img class=app src="data:image/jpeg;base64,${frameB64}">`;
-    if (!e) return `<!doctype html><meta charset=utf8><style>${STYLE}</style><div class=root><div class=row><div class=left>${left}</div><div class=panel><div class=sec>trace</div><div class=fr>watching for breakpoint hits…</div></div></div><div class=cap>journey — screen + live trace</div></div>`;
-    const a = attrsOf(e);
-    const stack = (a.stack || []).map((f) => `<div class=fr>${esc(f)}</div>`).join("");
-    const locals = Object.entries(a.locals || {}).map(([k, v]) => `<div class=kv><span class=k>${esc(k)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
-    const exprs = Object.entries(a.exprs || {}).map(([ex, v]) => `<div class="kv expr">⊢ <span class=k>${esc(ex)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
+    if (!event) return `<!doctype html><meta charset=utf8><style>${STYLE}</style><div class=root><div class=row><div class=left>${left}</div><div class=panel><div class=sec>trace</div><div class=fr>watching for breakpoint hits…</div></div></div><div class=cap>journey — screen + live trace</div></div>`;
+    const attributes = attrsOf(event);
+    const stack = (attributes.stack || []).map((frame) => `<div class=fr>${escapeHtml(frame)}</div>`).join("");
+    const locals = Object.entries(attributes.locals || {}).map(([name, value]) => `<div class=kv><span class=k>${escapeHtml(name)}</span> = <span class=v>${escapeHtml(oneLine(value))}</span></div>`).join("");
+    const exprs = Object.entries(attributes.exprs || {}).map(([expression, value]) => `<div class="kv expr">⊢ <span class=k>${escapeHtml(expression)}</span> = <span class=v>${escapeHtml(oneLine(value))}</span></div>`).join("");
     return `<!doctype html><meta charset=utf8><style>${STYLE}</style><div class=root>
       <div class=row><div class=left>${left}</div><div class=panel>
-        <div class=hdr>#${e.seq} &nbsp; +${e.t}ms</div>
-        <div class=loc>${esc((a.cls ? a.cls + "." : "") + e.label)} &nbsp;@ ${esc(locStr(e))}</div>
+        <div class=hdr>#${event.sequence} &nbsp; +${event.time}ms</div>
+        <div class=location>${escapeHtml((attributes.cls ? attributes.cls + "." : "") + event.label)} &nbsp;@ ${escapeHtml(locStr(event))}</div>
         <div class=sec>stack</div>${stack}
         ${locals ? `<div class=sec>locals</div>${locals}` : ""}
         ${exprs ? `<div class=sec>watch</div>${exprs}` : ""}
       </div></div>
-      <div class=cap>${esc(Recorder.#caption(e))}</div>
+      <div class=cap>${escapeHtml(Recorder.#caption(event))}</div>
     </div>`;
   }
 
@@ -75,39 +75,39 @@ export class Recorder {
    * Compose a side-by-side journey clip: the motion screencast on the left, and beside each moment the most
    * recent breakpoint hit (matched by wall-clock time). Frames are downsampled to keep the render bounded.
    */
-  static async renderJourney(frames: { data: Buffer; t: number }[], traced: { ev: TraceEvent; t: number }[], out: string): Promise<string | null> {
+  static async renderJourney(frames: { data: Buffer; t: number }[], traced: { ev: TraceEvent; t: number }[], outputPath: string): Promise<string | null> {
     if (frames.length < 2) return null;
-    const MAX = 160;
-    const pick = frames.length > MAX ? Array.from({ length: MAX }, (_, i) => frames[Math.floor(i * (frames.length / MAX))]) : frames;
-    const dir = mkdtempSync(join(tmpdir(), "trace-journey-"));
+    const MAX_FRAMES = 160;
+    const pickedFrames = frames.length > MAX_FRAMES ? Array.from({ length: MAX_FRAMES }, (_, index) => frames[Math.floor(index * (frames.length / MAX_FRAMES))]) : frames;
+    const tempDir = mkdtempSync(join(tmpdir(), "trace-journey-"));
     const chrome = await ChromeLauncher.launch(["--force-device-scale-factor=1"], { purpose: "video render" });
     let driver: CdpDriver | undefined;
     try {
       const targets = await (await fetch(`http://localhost:${chrome.port}/json`)).json() as any[];
-      const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl) || targets[0];
+      const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl) || targets[0];
       if (!page?.webSocketDebuggerUrl) throw new Error("render Chrome exposed no page target");
       driver = await CdpDriver.connect(page.webSocketDebuggerUrl);
       await driver.send(Cdp.Page.enable);
-      await driver.send(Cdp.Emulation.setDeviceMetricsOverride, { width: OW, height: OH, deviceScaleFactor: 1, mobile: false });
-      const files: string[] = [];
-      for (let i = 0; i < pick.length; i++) {
-        const f = pick[i];
-        const active = [...traced].reverse().find((h) => h.t <= f.t)?.ev ?? null;
-        const file = join(dir, `f${String(i).padStart(5, "0")}.png`);
-        await Recorder.#renderFrame(driver, Recorder.#journeyFrameHtml(f.data.toString("base64"), active), file);
-        files.push(file);
+      await driver.send(Cdp.Emulation.setDeviceMetricsOverride, { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT, deviceScaleFactor: 1, mobile: false });
+      const framePaths: string[] = [];
+      for (let index = 0; index < pickedFrames.length; index++) {
+        const frame = pickedFrames[index];
+        const activeEvent = [...traced].reverse().find((hit) => hit.t <= frame.t)?.ev ?? null;
+        const framePath = join(tempDir, `f${String(index).padStart(5, "0")}.png`);
+        await Recorder.#renderFrame(driver, Recorder.#journeyFrameHtml(frame.data.toString("base64"), activeEvent), framePath);
+        framePaths.push(framePath);
       }
       const lines: string[] = [];
-      pick.forEach((f, i) => { const next = pick[i + 1]; const dur = next ? Math.min(2, Math.max(0.05, (next.t - f.t) / 1000)) : 1.5; lines.push(`file '${files[i]}'`, `duration ${dur.toFixed(3)}`); });
-      lines.push(`file '${files[files.length - 1]}'`);
-      const listFile = join(dir, FRAMES_LIST_FILE);
+      pickedFrames.forEach((frame, index) => { const nextFrame = pickedFrames[index + 1]; const duration = nextFrame ? Math.min(2, Math.max(0.05, (nextFrame.t - frame.t) / 1000)) : 1.5; lines.push(`file '${framePaths[index]}'`, `duration ${duration.toFixed(3)}`); });
+      lines.push(`file '${framePaths[framePaths.length - 1]}'`);
+      const listFile = join(tempDir, FRAMES_LIST_FILE);
       writeFileSync(listFile, lines.join("\n") + "\n");
-      await ffmpeg([...concatInput(listFile), ...h264Mp4({ pixFmt: "yuv420p" }), out]);
-      return out;
+      await ffmpeg([...concatInput(listFile), ...h264Mp4({ pixFmt: "yuv420p" }), outputPath]);
+      return outputPath;
     } finally {
       try { driver?.close(); } catch { /* ignore */ }
       chrome.kill();
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(tempDir, { recursive: true, force: true });
     }
   }
 }

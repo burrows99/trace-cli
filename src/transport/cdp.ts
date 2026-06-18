@@ -8,8 +8,9 @@ export const Cdp = {
   Runtime: {
     enable: "Runtime.enable",
     evaluate: "Runtime.evaluate",
-    getProperties: "Runtime.getProperties",
+    addBinding: "Runtime.addBinding",              // expose a global fn whose calls surface as bindingCalled
     consoleAPICalled: "Runtime.consoleAPICalled", // (event)
+    bindingCalled: "Runtime.bindingCalled",       // (event) — a logpoint emitted a captured hit
     exceptionThrown: "Runtime.exceptionThrown",   // (event)
   },
   Debugger: {
@@ -18,16 +19,14 @@ export const Cdp = {
     setPauseOnExceptions: "Debugger.setPauseOnExceptions",
     setInstrumentationBreakpoint: "Debugger.setInstrumentationBreakpoint",
     setBreakpointByUrl: "Debugger.setBreakpointByUrl",
+    getScriptSource: "Debugger.getScriptSource",  // generated source → in-scope name extraction
     removeBreakpoint: "Debugger.removeBreakpoint",
-    evaluateOnCallFrame: "Debugger.evaluateOnCallFrame",
-    stepOver: "Debugger.stepOver",
-    stepInto: "Debugger.stepInto",
-    stepOut: "Debugger.stepOut",
     paused: "Debugger.paused",             // (event)
     scriptParsed: "Debugger.scriptParsed", // (event)
   },
   Page: {
     enable: "Page.enable",
+    addScriptToEvaluateOnNewDocument: "Page.addScriptToEvaluateOnNewDocument", // re-inject the logpoint helper per document
     navigate: "Page.navigate",
     captureScreenshot: "Page.captureScreenshot",
     bringToFront: "Page.bringToFront",

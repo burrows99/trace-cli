@@ -1,19 +1,19 @@
 import { Allow, IsArray, IsInt, IsOptional, IsString, ValidateNested } from "class-validator";
 import { Type } from "class-transformer";
-import { Loc } from "./Loc.js";
+import { SourceLocation } from "./SourceLocation.js";
 
 export type LineageKind = "expr" | "local";
 
 /** One observation of a tracked value at a hit. */
 export class LineagePoint {
-  @IsInt() seq: number;
-  @IsOptional() t?: number | string;
-  @IsOptional() @ValidateNested() @Type(() => Loc) loc?: Loc;
+  @IsInt() sequence: number;
+  @IsOptional() time?: number | string;
+  @IsOptional() @ValidateNested() @Type(() => SourceLocation) location?: SourceLocation;
   @Allow() value: unknown;
   @IsOptional() changed?: boolean;
 
   constructor(init: Partial<LineagePoint> = {}) {
-    this.seq = init.seq ?? 0;
+    this.sequence = init.sequence ?? 0;
     Object.assign(this, init);
   }
 }

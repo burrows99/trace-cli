@@ -9,12 +9,12 @@ import { validateSync, type ValidationError } from "class-validator";
  * recursion into `children` surfaces failures inside nested entities (events[], lineage[].series[],
  * data.recording, …) with a dotted path.
  */
-export function validateStrict(obj: object): string[] {
-  const flatten = (errs: ValidationError[], path = ""): string[] =>
-    errs.flatMap((e) => {
-      const at = path ? `${path}.${e.property}` : e.property;
-      const here = Object.values(e.constraints ?? {}).map((m) => `${at}: ${m}`);
-      return e.children?.length ? here.concat(flatten(e.children, at)) : here;
+export function validateStrict(target: object): string[] {
+  const flatten = (errors: ValidationError[], path = ""): string[] =>
+    errors.flatMap((error) => {
+      const fieldPath = path ? `${path}.${error.property}` : error.property;
+      const messages = Object.values(error.constraints ?? {}).map((message) => `${fieldPath}: ${message}`);
+      return error.children?.length ? messages.concat(flatten(error.children, fieldPath)) : messages;
     });
-  return flatten(validateSync(obj, { whitelist: true, forbidNonWhitelisted: true }));
+  return flatten(validateSync(target, { whitelist: true, forbidNonWhitelisted: true }));
 }

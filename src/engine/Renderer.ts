@@ -2,46 +2,46 @@ import type { Trace } from "../domain/Trace.js";
 import type { Lineage } from "../domain/Lineage.js";
 import { LineageAnalyzer } from "../analysis/LineageAnalyzer.js";
 
-const fmt = (v: unknown): string => {
-  const s = typeof v === "string" ? v : JSON.stringify(v);
-  return s == null ? String(v) : s.length > 140 ? s.slice(0, 140) + "…" : s;
+const formatValue = (value: unknown): string => {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  return serialized == null ? String(value) : serialized.length > 140 ? serialized.slice(0, 140) + "…" : serialized;
 };
 
 /** Renderer — turns a Trace into the human-readable execution trace + a mutations summary. */
 export class Renderer {
   static render(trace: Trace): string {
-    const d = trace.data;
-    const L: string[] = [];
-    L.push(`\n═══ EXECUTION TRACE [${trace.target?.kind ?? "?"}] · ${trace.meta.at} ═══`);
-    if (trace.target?.trigger) L.push(`trigger: ${trace.target.trigger}`);
-    const fatal = trace.diagnostics.find((x) => x.code === "ENGINE_FATAL");
-    if (fatal) L.push(`FATAL: ${fatal.message}`);
-    for (const b of d.breakpoints ?? []) {
-      L.push(`bp ${b.bound ? "●" : "○ (not bound" + (b.note ? " — " + b.note : "") + ")"} ${b.file}:${b.line}`);
+    const data = trace.data;
+    const lines: string[] = [];
+    lines.push(`\n═══ EXECUTION TRACE [${trace.target?.kind ?? "?"}] · ${trace.meta.at} ═══`);
+    if (trace.target?.trigger) lines.push(`trigger: ${trace.target.trigger}`);
+    const fatal = trace.diagnostics.find((diagnostic) => diagnostic.code === "ENGINE_FATAL");
+    if (fatal) lines.push(`FATAL: ${fatal.message}`);
+    for (const breakpoint of data.breakpoints ?? []) {
+      lines.push(`bp ${breakpoint.bound ? "●" : "○ (not bound" + (breakpoint.note ? " — " + breakpoint.note : "") + ")"} ${breakpoint.file}:${breakpoint.line}`);
     }
-    if (!(d.events?.length)) L.push(`\n⚠ no breakpoints hit — line(s) not on this path (right target/route? branch not taken? not bound?).`);
-    for (const h of d.events ?? []) {
-      const a = (h.attrs ?? {}) as { cls?: string; stack?: string[]; locals?: Record<string, unknown>; exprs?: Record<string, unknown> };
-      const at = h.loc ? `${h.loc.file}:${h.loc.line ?? ""}` : "";
-      L.push(`\n#${h.seq}  +${h.t}ms  ${a.cls ? a.cls + "." : ""}${h.label}  ${at}${String(h.kind).startsWith("step") ? "  [" + h.kind + "]" : ""}`);
-      if (a.stack) L.push("   stack: " + a.stack.join("  ←  "));
-      for (const [k, v] of Object.entries(a.locals ?? {})) L.push(`   • ${k} = ${fmt(v)}`);
-      if (a.exprs) for (const [e, v] of Object.entries(a.exprs)) L.push(`   ⊢ ${e} = ${fmt(v)}`);
+    if (!(data.events?.length)) lines.push(`\n⚠ no breakpoints hit — line(s) not on this path (right target/route? branch not taken? not bound?).`);
+    for (const event of data.events ?? []) {
+      const attributes = (event.attributes ?? {}) as { cls?: string; stack?: string[]; locals?: Record<string, unknown>; exprs?: Record<string, unknown> };
+      const locationLabel = event.location ? `${event.location.file}:${event.location.line ?? ""}` : "";
+      lines.push(`\n#${event.sequence}  +${event.time}ms  ${attributes.cls ? attributes.cls + "." : ""}${event.label}  ${locationLabel}${String(event.kind).startsWith("step") ? "  [" + event.kind + "]" : ""}`);
+      if (attributes.stack) lines.push("   stack: " + attributes.stack.join("  ←  "));
+      for (const [name, value] of Object.entries(attributes.locals ?? {})) lines.push(`   • ${name} = ${formatValue(value)}`);
+      if (attributes.exprs) for (const [expression, value] of Object.entries(attributes.exprs)) lines.push(`   ⊢ ${expression} = ${formatValue(value)}`);
     }
-    if (d.console?.length) { L.push(`\nconsole (${d.console.length}):`); for (const c of d.console.slice(0, 8)) L.push(`   ${c.type === "error" || c.type === "exception" ? "✗" : "⚠"} [${c.type}] ${c.text}`); }
-    if (d.network?.length) { L.push(`\nfailed requests (${d.network.length}):`); for (const n of d.network.slice(0, 8)) L.push(`   ${n.status} ${n.url}`); }
-    if (d.response) L.push(`\nresponse: exit ${d.response.exitCode}${d.response.error ? " (" + d.response.error + ")" : ""}${d.response.body ? "  " + d.response.body.split("\n")[0].slice(0, 120) : ""}`);
-    if (d.finalUrl) L.push(`\nfinal url: ${d.finalUrl}`);
-    if (d.screenshot) L.push(`screenshot → ${d.screenshot}`);
-    return L.join("\n");
+    if (data.console?.length) { lines.push(`\nconsole (${data.console.length}):`); for (const consoleEntry of data.console.slice(0, 8)) lines.push(`   ${consoleEntry.type === "error" || consoleEntry.type === "exception" ? "✗" : "⚠"} [${consoleEntry.type}] ${consoleEntry.text}`); }
+    if (data.network?.length) { lines.push(`\nfailed requests (${data.network.length}):`); for (const request of data.network.slice(0, 8)) lines.push(`   ${request.status} ${request.url}`); }
+    if (data.response) lines.push(`\nresponse: exit ${data.response.exitCode}${data.response.error ? " (" + data.response.error + ")" : ""}${data.response.body ? "  " + data.response.body.split("\n")[0].slice(0, 120) : ""}`);
+    if (data.finalUrl) lines.push(`\nfinal url: ${data.finalUrl}`);
+    if (data.screenshot) lines.push(`screenshot → ${data.screenshot}`);
+    return lines.join("\n");
   }
 
   static renderLineage(lineage?: Lineage[]): string {
     if (!lineage?.length) return "";
-    const L = ["\n── mutations (how values changed as flow continued) ──"];
-    for (const tr of lineage) {
-      L.push(`   ${tr.kind === "expr" ? "⊢" : "•"} ${tr.name}: ${LineageAnalyzer.summary(tr)}   (${tr.changes} change${tr.changes === 1 ? "" : "s"} / ${tr.occurrences} hits)`);
+    const lines = ["\n── mutations (how values changed as flow continued) ──"];
+    for (const mutation of lineage) {
+      lines.push(`   ${mutation.kind === "expr" ? "⊢" : "•"} ${mutation.name}: ${LineageAnalyzer.summary(mutation)}   (${mutation.changes} change${mutation.changes === 1 ? "" : "s"} / ${mutation.occurrences} hits)`);
     }
-    return L.join("\n");
+    return lines.join("\n");
   }
 }

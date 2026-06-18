@@ -16,17 +16,15 @@ test("manifest describes the tool and the whole command tree", () => {
   assert.match(m.version, /^\d+\.\d+\.\d+/);
   assert.equal(m.command.name, "trace-cli");
   const names = m.command.commands.map((c) => c.name).sort();
-  // Generated from the parser — every registered subcommand appears, including manifest itself.
-  assert.deepEqual(names, ["doctor", "dynamic", "export-skill", "manifest", "schema", "serve", "static"]);
-  // `static` is a group; the manifest recurses into its analyses (graph moved under it).
-  const stat = m.command.commands.find((c) => c.name === "static");
-  assert.deepEqual(stat.commands.map((c) => c.name).sort(), ["complexity", "deps", "graph", "symbols"]);
+  // Generated from the parser — every registered subcommand appears, including manifest itself. The four
+  // static analyses (graph/deps/complexity/symbols) sit at the top level alongside the runtime `run` command.
+  assert.deepEqual(names, ["complexity", "deps", "doctor", "export-skill", "graph", "manifest", "run", "schema", "serve", "symbols"]);
 });
 
 test("manifest captures option metadata: flags, defaults, optional, negate", () => {
-  const dyn = manifest().command.commands.find((c) => c.name === "dynamic");
-  const bp = dyn.options.find((o) => o.flags.startsWith("--bp"));
-  assert.ok(bp, "--bp option present");
+  const dyn = manifest().command.commands.find((c) => c.name === "run");
+  const bp = dyn.options.find((o) => o.flags.startsWith("--breakpoint"));
+  assert.ok(bp, "--breakpoint option present");
   assert.deepEqual(bp.default, []); // repeatable collect accumulator defaults to []
   assert.equal(dyn.options.find((o) => o.flags.startsWith("--node")).optional, true); // --node [port]
   // negate extraction: the trimmed CLI has no --no-* flag, so verify the generator against a synthetic one.

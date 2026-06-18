@@ -159,18 +159,18 @@ function EventRow({
   open: boolean;
   onToggle: () => void;
 }) {
-  const a = e.attrs ?? {};
-  const locStr = e.loc ? `${e.loc.file}:${e.loc.line ?? ""}` : "";
+  const a = e.attributes ?? {};
+  const locStr = e.location ? `${e.location.file}:${e.location.line ?? ""}` : "";
   const hasLocals = a.locals && Object.keys(a.locals).length > 0;
   const hasExprs = a.exprs && Object.keys(a.exprs).length > 0;
   const hasStack = a.stack && a.stack.length > 0;
   return (
     <div className={`evt${open ? " open" : ""}`}>
       <div className="head" onClick={onToggle}>
-        <span className="seq">#{e.seq}</span>
+        <span className="sequence">#{e.sequence}</span>
         <span className="kind">{e.kind}</span>
         <span className="label">{e.label ?? ""}</span>
-        <span className="loc">{locStr}</span>
+        <span className="location">{locStr}</span>
         <span className="t">+{e.t}ms</span>
       </div>
       <div className="body">

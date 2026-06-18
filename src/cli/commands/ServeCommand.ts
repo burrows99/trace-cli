@@ -6,9 +6,9 @@ export interface ServeOptions { port?: number; host?: string; databaseUrl?: stri
 
 /** ServeCommand — runs the collector + realtime UI (a long-lived process), backed by Postgres. */
 export class ServeCommand extends CliCommand<ServeOptions, void> {
-  run(opts: ServeOptions = {}): void {
-    const store = createSessionStore({ databaseUrl: opts.databaseUrl });
-    new Collector(store).listen({ port: opts.port, host: opts.host });
+  run(options: ServeOptions = {}): void {
+    const store = createSessionStore({ databaseUrl: options.databaseUrl });
+    new Collector(store).listen({ port: options.port, host: options.host });
     // the listening server keeps the process alive — no exit here.
   }
 }

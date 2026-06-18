@@ -9,5 +9,5 @@
  * the shared envelope-stamping and a `render(trace)` contract; everything else extends this base directly.
  */
 export abstract class CliCommand<Req = void, Res = void> {
-  abstract run(req: Req): Res | Promise<Res>;
+  abstract run(request: Req): Res | Promise<Res>;
 }

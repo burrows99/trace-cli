@@ -2,7 +2,7 @@
 // reflect-metadata MUST initialize before any decorated class evaluates (class-transformer @Type needs it).
 import "reflect-metadata";
 
-export { Loc } from "./Loc.js";
+export { SourceLocation } from "./SourceLocation.js";
 export { Diagnostic } from "./Diagnostic.js";
 export type { DiagnosticLevel } from "./Diagnostic.js";
 export { Breakpoint } from "./Breakpoint.js";
@@ -11,7 +11,7 @@ export type { EventSource } from "./TraceEvent.js";
 export { Lineage, LineagePoint } from "./Lineage.js";
 export type { LineageKind } from "./Lineage.js";
 export { Recording } from "./Recording.js";
-export { Target, NodeTarget, ChromeTarget, TargetRef, TargetKind, TARGET_LABEL } from "./Target.js";
+export { Target, NodeTarget, ChromeTarget, TargetReference, TargetKind, TARGET_LABEL } from "./Target.js";
 export type { ProtocolKind } from "./Target.js";
 export { Trace, TraceMeta, TraceData, CurlResponse } from "./Trace.js";
 export type { ConsoleLine, NetworkLine } from "./Trace.js";

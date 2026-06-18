@@ -24,30 +24,30 @@ export type EnvelopePlain = Record<string, any>;
  * sync because it only registers a realtime callback. The shipped implementation is PostgresSessionStore.
  */
 export interface SessionStore {
-  ingest(env: EnvelopePlain): Promise<SessionSummary | null>;
+  ingest(envelope: EnvelopePlain): Promise<SessionSummary | null>;
   list(): Promise<SessionSummary[]>;
   get(id: string): Promise<EnvelopePlain | null>;
-  subscribe(fn: (s: SessionSummary) => void): () => void;
+  subscribe(callback: (summary: SessionSummary) => void): () => void;
   clear(): Promise<void>;
   size(): Promise<number>;
 }
 
-/** summarize(env) — the compact row for an ingested envelope. */
-export function summarize(env: EnvelopePlain): SessionSummary {
-  const events = env?.data?.events ?? [];
-  const diags: Array<{ level: string }> = env?.diagnostics ?? [];
+/** summarize(envelope) — the compact row for an ingested envelope. */
+export function summarize(envelope: EnvelopePlain): SessionSummary {
+  const events = envelope?.data?.events ?? [];
+  const diagnostics: Array<{ level: string }> = envelope?.diagnostics ?? [];
   return {
-    sessionId: env?.meta?.sessionId ?? null,
-    command: env?.command ?? null,
-    target: env?.target?.kind ?? null,
-    source: env?.target?.source ?? events[0]?.source ?? null,
-    ok: env?.ok ?? null,
-    at: env?.meta?.at ?? null,
-    durationMs: env?.meta?.durationMs ?? null,
+    sessionId: envelope?.meta?.sessionId ?? null,
+    command: envelope?.command ?? null,
+    target: envelope?.target?.kind ?? null,
+    source: envelope?.target?.source ?? events[0]?.source ?? null,
+    ok: envelope?.ok ?? null,
+    at: envelope?.meta?.at ?? null,
+    durationMs: envelope?.meta?.durationMs ?? null,
     eventCount: events.length,
-    trigger: env?.target?.trigger ?? null,
-    errors: diags.filter((d) => d.level === "error").length,
-    warns: diags.filter((d) => d.level === "warn").length,
-    running: env?.meta?.running === true,
+    trigger: envelope?.target?.trigger ?? null,
+    errors: diagnostics.filter((diagnostic) => diagnostic.level === "error").length,
+    warns: diagnostics.filter((diagnostic) => diagnostic.level === "warn").length,
+    running: envelope?.meta?.running === true,
   };
 }

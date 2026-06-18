@@ -3,9 +3,9 @@ import { performance } from "node:perf_hooks";
 import { CdpDriver, log } from "../transport/CdpDriver.js";
 import { Cdp } from "../transport/cdp.js";
 import { SourceMaps } from "./SourceMaps.js";
+import { BreakpointBinder } from "./BreakpointBinder.js";
 import { BreakpointResolver } from "./BreakpointResolver.js";
-import { BpBinder } from "./BpBinder.js";
-import { EventCapturer, type CdpCtx } from "./EventCapturer.js";
+import { BINDING_NAME, HELPER_SOURCE, LogpointCapturer } from "./Logpoint.js";
 import { CurlTrigger, type CurlResult } from "./CurlTrigger.js";
 import { Screencaster } from "./Screencaster.js";
 import { JourneyRunner, type StepResult, type TraceConfig } from "./JourneyRunner.js";
@@ -48,210 +48,138 @@ export interface TraceOptions {
   attachTimeoutMs?: number;
   reqTimeoutMs?: number;
   curl?: string;
-  url?: string;
-  shot?: string;
-  record?: boolean;
   urlMatch?: string;
   titleMatch?: string;
   sessionId?: string;
   args?: Record<string, unknown>;
   /**
-   * Progress hook, fired once per captured event with the full set of events captured *so far* (the same
-   * growing array, shared across tabs for Chrome). Lets the command layer stream partial traces to a
-   * collector while the run is still in flight, instead of only emitting the finished envelope.
+   * Progress hook, fired once per captured event with the full set of events captured *so far*. Lets the
+   * command layer stream partial traces to a collector while the run is still in flight.
    */
   onEvent?: (events: TraceEvent[]) => void;
 }
 
 /**
- * A CapturePlan is the *only* thing that differs between the Node and Chrome targets. Everything
- * structural — connect, enable, bind-before-trigger, the pause/capture loop, cleanup — lives in
- * Tracer.#capture and is shared. So a change to capture/binding/teardown affects both targets at once;
- * a change to arming or triggering touches just the one target that needs it.
- */
-interface CapturePlan {
-  result: CaptureResult;
-  /** discover the CDP websocket for this target. */
-  resolveWs(): Promise<string>;
-  /** target-specific protocol domains beyond Runtime+Debugger (Chrome: Page+Network). */
-  enableExtra(driver: CdpDriver): Promise<void>;
-  /** wire event listeners (Chrome: console/network/load). */
-  attach(driver: CdpDriver): void;
-  /**
-   * Make breakpoints bindable *before* the traced code runs. Node: the process is already up with its
-   * scripts parsed, so we just let them settle. Chrome: a fresh page hasn't parsed anything yet, so we
-   * arm a `beforeScriptExecution` instrumentation pause — the engine then binds as each script appears
-   * during the trigger navigation, before that script executes.
-   */
-  arm(driver: CdpDriver): Promise<void>;
-  /** true for targets whose binding is interleaved with the trigger via instrumentation pauses. */
-  instrumentation: boolean;
-  /** the page finished loading (Chrome) — used to stop instrumentation pumping and to shorten waits. */
-  loaded(): boolean;
-  /** fire the trigger that exercises the code (Node: curl; Chrome: navigate). Non-blocking. */
-  fire(driver: CdpDriver, ctx: CdpCtx): void;
-  /** per-pause wait budget. */
-  timeout(): number;
-  /** wait budget for step plans at the first hit. */
-  stepTimeoutMs: number;
-  /** a `null` pause means the wait was interrupted; Node breaks (curl is done), Chrome keeps going. */
-  stopOnInterrupt: boolean;
-  /** stop after capturing a hit (Node: once the trigger settled and nothing is queued). */
-  shouldStop(driver: CdpDriver): boolean;
-  /** drop the instrumentation pause once binding is settled (Chrome). */
-  removeInstr(driver: CdpDriver): Promise<void>;
-  /** await any outstanding trigger work (Node: the curl promise). */
-  drain(): Promise<void>;
-  /** post-capture work (Chrome: final url + screenshot, stop screencast). */
-  finish(driver: CdpDriver): Promise<void>;
-  /** notified of each captured breakpoint event (Chrome --record: stamps it with wall-clock time). */
-  onCapture?(ev: TraceEvent): void;
-}
-
-/**
  * Tracer — the trigger+capture engine, one method per target, each returning a CaptureResult so the command
- * layer treats targets symmetrically. Depends on the CdpDriver (ProtocolDriver) via DIP. `traceNode` binds
- * into an already-running `--inspect` process and fires one curl through the shared `#capture` pump loop.
- * `traceChrome` drives a scripted UI journey across tabs and records it — a fundamentally different control
- * flow (multi-step, async, tab-following), so it delegates to JourneyRunner rather than the one-shot pump;
- * the breakpoint primitives (BpBinder, EventCapturer, SourceMaps) are shared across both. Produces domain
- * entities (TraceEvent, Breakpoint) — the command layer assembles them into a Trace.
+ * layer treats targets symmetrically. Breakpoints are armed as **non-pausing logpoints** (see {@link BreakpointBinder}):
+ * a hit ships its captured stack/locals/exprs out through a CDP binding without ever halting the VM, so the
+ * traced app runs at full speed and a hot path is no longer capped by per-hit pause cost. `traceNode` binds
+ * into a running `--inspect` process and fires one curl; `traceChrome` drives a scripted UI journey across tabs
+ * and records it (delegating to JourneyRunner). The binding/binding-capture primitives are shared across both.
  */
 export class Tracer {
-  // ---- shared CDP helpers ----------------------------------------------------------------------
-
-  async #settleScripts(driver: CdpDriver, ms = 1500): Promise<void> {
-    let prev = -1, stable = 0;
-    for (let i = 0; i < ms / 100; i++) {
-      const n = driver.scripts().size;
-      if (n === prev) { if (++stable >= 3) break; } else stable = 0;
-      prev = n;
+  async #settleScripts(driver: CdpDriver, settleMs = 1500): Promise<void> {
+    let previousCount = -1, stablePolls = 0;
+    for (let poll = 0; poll < settleMs / 100; poll++) {
+      const scriptCount = driver.scripts().size;
+      if (scriptCount === previousCount) { if (++stablePolls >= 3) break; } else stablePolls = 0;
+      previousCount = scriptCount;
       await sleep(100);
     }
   }
 
-  // ---- the one capture loop, shared by every target -------------------------------------------
+  /** Install the logpoint transport on a freshly-enabled context: the emit binding + the in-page serializer. */
+  static async installLogpointHelper(driver: CdpDriver): Promise<void> {
+    await driver.send(Cdp.Runtime.addBinding, { name: BINDING_NAME }).catch(() => {});
+    await driver.send(Cdp.Runtime.evaluate, { expression: HELPER_SOURCE }).catch(() => {});
+  }
 
-  async #capture(opts: TraceOptions, plan: CapturePlan): Promise<CaptureResult> {
-    const { breakpoints = [], root, exprs = [], steps = [], frames = 6, maxHits = 25, attachTimeoutMs = DEFAULT_ATTACH_TIMEOUT_MS, sessionId } = opts;
-    const bps = BreakpointResolver.resolveAll(breakpoints, root);
-    const result = plan.result;
-    const driver = await CdpDriver.connect(opts.wsUrl || (await plan.resolveWs()), attachTimeoutMs);
-    const sm = new SourceMaps(driver, root);
-    const ctx: CdpCtx = { t0: performance.now(), events: result.events, frames, exprs, steps, sm, bpById: new Map(), sessionId };
-    const binder = new BpBinder(bps);
-    const capturer = new EventCapturer(driver);
-    plan.attach(driver);
+  // ---- Node target -----------------------------------------------------------------------------
+
+  async traceNode(options: TraceOptions): Promise<CaptureResult> {
+    const {
+      port = DEFAULT_NODE_PORT, curl, urlMatch, titleMatch, breakpoints = [], root, exprs = [],
+      frames = 6, maxHits = 100, attachTimeoutMs = DEFAULT_ATTACH_TIMEOUT_MS, reqTimeoutMs = 60000,
+    } = options;
+    const result: CaptureResult = { target: TargetKind.Node, trigger: curl ?? null, breakpoints: [], events: [] };
+    const driver = await CdpDriver.connect(options.wsUrl || (await CdpDriver.resolveWsUrl(port, { kind: TargetKind.Node, urlMatch, titleMatch })), attachTimeoutMs);
+    const sourceMaps = new SourceMaps(driver, root);
+    const binder = new BreakpointBinder(BreakpointResolver.resolveAll(breakpoints, root), exprs);
+
+    const startTime = performance.now();
+    const capturer = new LogpointCapturer(driver, sourceMaps, startTime, frames);
+    const pendingPayloads: string[] = [];
+    driver.on(Cdp.Runtime.bindingCalled, (event: any) => { if (event?.name === BINDING_NAME) pendingPayloads.push(event.payload); });
+    // Logpoints never pause; this safety resume keeps a stray `debugger;` in the traced app from hanging the run.
+    driver.on(Cdp.Debugger.paused, () => { void driver.send(Cdp.Debugger.resume).catch(() => {}); });
+
     try {
       await driver.send(Cdp.Runtime.enable);
       await driver.send(Cdp.Debugger.enable);
       await driver.send(Cdp.Debugger.setPauseOnExceptions, { state: "none" });
-      await plan.enableExtra(driver);
-      await plan.arm(driver);
-      await binder.tryBind(driver, sm);          // Node binds here; Chrome binds during instrumentation pumping
-      ctx.bpById = binder.bpById;
+      await Tracer.installLogpointHelper(driver);
+      await this.#settleScripts(driver);
+      await binder.tryBind(driver, sourceMaps);
 
-      ctx.t0 = performance.now();
-      plan.fire(driver, ctx);
-
-      while (result.events.length < maxHits) {
-        let paused: any;
-        try { paused = await driver.waitForStop(plan.timeout()); } catch { break; }
-        if (paused === null) { if (plan.stopOnInterrupt) break; else continue; }
-        // Chrome: a script is about to run for the first time — bind any breakpoints it carries, then resume.
-        if (plan.instrumentation && paused.reason === "instrumentation") {
-          if (!binder.allSettled()) { await binder.tryBind(driver, sm); ctx.bpById = binder.bpById; }
-          if (binder.allSettled() || plan.loaded()) await plan.removeInstr(driver);
-          await driver.send(Cdp.Debugger.resume).catch(() => {});
-          continue;
-        }
-        const ev = await capturer.capture(paused, "breakpoint", ctx);
-        result.events.push(ev);
-        plan.onCapture?.(ev);
-        opts.onEvent?.(result.events);
-        await capturer.runSteps(ctx, plan.stepTimeoutMs);
-        await driver.send(Cdp.Debugger.resume).catch(() => {});
-        if (plan.shouldStop(driver)) break;
+      let triggerDone = !curl;
+      let response: CurlResult | undefined;
+      if (curl) {
+        log(`fired: ${curl.length > 90 ? curl.slice(0, 90) + "…" : curl}`);
+        void CurlTrigger.run(curl, reqTimeoutMs).then((curlResult) => { response = curlResult; }).finally(() => { triggerDone = true; });
       }
-      await plan.drain();
-      await plan.finish(driver);
-    } catch (e: any) {
-      result.fatal = String(e?.stack || e?.message || e); log("FATAL", result.fatal.split("\n")[0]);
+      // Drain: hits are emitted synchronously during request handling, but bindingCalled arrives async — wait
+      // for the trigger to settle, then until the payload count goes quiet (or a hard ceiling).
+      const deadline = performance.now() + reqTimeoutMs;
+      let quietPolls = 0, previousPendingCount = -1;
+      while (performance.now() < deadline) {
+        await sleep(50);
+        const drained = triggerDone && pendingPayloads.length === previousPendingCount;
+        if (drained) { if (++quietPolls >= 3) break; } else quietPolls = 0;
+        previousPendingCount = pendingPayloads.length;
+      }
+      result.response = response;
+      // Convert the gathered payloads into events (source-map the stacks), respecting maxHits.
+      for (const payload of pendingPayloads.slice(0, maxHits)) {
+        const event = await capturer.toEvent(payload, result.events.length + 1);
+        if (!event) continue;
+        result.events.push(event);
+        options.onEvent?.(result.events);
+      }
+    } catch (error: any) {
+      result.fatal = String(error?.stack || error?.message || error); log("FATAL", result.fatal.split("\n")[0]);
     } finally {
       result.breakpoints = binder.report();
-      for (const miss of binder.unbound()) log(`bp ${miss} → not bound (line not on this path / wrong route?)`);
-      await plan.removeInstr(driver).catch(() => {});
-      for (const id of ctx.bpById.keys()) await driver.send(Cdp.Debugger.removeBreakpoint, { breakpointId: id }).catch(() => {});
-      await driver.send(Cdp.Debugger.resume).catch(() => {});
-      driver.close(); sm.dispose();
+      for (const unboundBreakpoint of binder.unbound()) log(`bp ${unboundBreakpoint} → not bound (line not on this path / wrong route?)`);
+      driver.close(); sourceMaps.dispose();
     }
     return result;
   }
 
-  // ---- targets: each builds a CapturePlan, then hands off to the shared loop --------------------
-
-  async traceNode(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = DEFAULT_NODE_PORT, curl, urlMatch, titleMatch, timeoutMs = 30000, reqTimeoutMs = 60000 } = opts;
-    const result: CaptureResult = { target: TargetKind.Node, trigger: curl ?? null, breakpoints: [], events: [] };
-    let triggerDone = !curl;
-    let triggerPromise: Promise<void> = Promise.resolve();
-    const plan: CapturePlan = {
-      result,
-      resolveWs: () => CdpDriver.resolveWsUrl(port, { kind: TargetKind.Node, urlMatch, titleMatch }),
-      enableExtra: async () => {},
-      attach: () => {},
-      arm: async (driver) => { await this.#settleScripts(driver); },
-      instrumentation: false,
-      loaded: () => false,
-      fire: (driver, ctx) => {
-        if (!curl) return;
-        ctx.t0 = performance.now();
-        log(`fired: ${curl.length > 90 ? curl.slice(0, 90) + "…" : curl}`);
-        triggerPromise = CurlTrigger.run(curl, reqTimeoutMs).then((r) => { result.response = r; }).finally(() => { triggerDone = true; driver.interrupt(); });
-      },
-      timeout: () => timeoutMs,
-      stepTimeoutMs: timeoutMs,
-      stopOnInterrupt: true,
-      shouldStop: (driver) => triggerDone && !driver.hasQueued(),
-      removeInstr: async () => {},
-      drain: async () => { await triggerPromise.catch(() => {}); },
-      finish: async () => {},
-    };
-    return this.#capture(opts, plan);
-  }
+  // ---- Chrome target ---------------------------------------------------------------------------
 
   /**
-   * Chrome target: drive the scripted UI journey (`opts.steps`) with breakpoints armed on every tab and the
+   * Chrome target: drive the scripted UI journey (`opts.steps`) with logpoints armed on every tab and the
    * screencast running throughout, so one run yields the trace events AND the frames/hits the recorder lays
    * into a screen + trace-panel replay. Multi-step + tab-following needs JourneyRunner's async, sequential
-   * driver — not the single-trigger `#capture` pump — but the binding/capture primitives are the same.
+   * driver; the binding/capture primitives are the same as Node.
    */
-  async traceChrome(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 30, urlMatch } = opts;
-    const parsed = steps.map((s) => JourneyRunner.parseStep(s));
-    const cast = new Screencaster();
-    const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: opts.onEvent };
-    const runner = new JourneyRunner(port, cast, config);
+  async traceChrome(options: TraceOptions): Promise<CaptureResult> {
+    const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 100, urlMatch } = options;
+    const parsedSteps = steps.map((step) => JourneyRunner.parseStep(step));
+    const screencaster = new Screencaster();
+    const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: options.onEvent };
+    const runner = new JourneyRunner(port, screencaster, config);
     let stepResults: StepResult[] = [];
     let fatal: string | undefined;
     try {
-      // A journey that opens with a navigation needs the first tab instrumented, so breakpoints bind before
-      // that page's scripts run (on-mount code executes once and is otherwise missed). parseStep guarantees order.
-      await runner.start(urlMatch, parsed[0]?.action === "goto");
-      stepResults = await runner.run(parsed);
-    } catch (e: any) {
-      fatal = String(e?.message ?? e);
+      // Arm THE ONE PAUSE (bind-before-first-run, see TabTracer) only when the journey opens by navigating a
+      // fresh tab — a leading `goto` — so on-mount code is caught. Attach-then-click flows don't need it.
+      const bindBeforeFirstRun = parsedSteps[0]?.action === "goto";
+      await runner.start(urlMatch, bindBeforeFirstRun);
+      stepResults = await runner.run(parsedSteps);
+    } catch (error: any) {
+      fatal = String(error?.message ?? error);
     } finally {
-      await cast.stop().catch(() => {});
+      await screencaster.stop().catch(() => {});
       runner.close();
     }
     return {
       target: TargetKind.Chrome,
-      trigger: parsed.find((s) => s.action === "goto")?.arg ?? `${parsed.length} steps`,
+      trigger: parsedSteps.find((step) => step.action === "goto")?.arg ?? `${parsedSteps.length} steps`,
       breakpoints: runner.breakpoints(),
-      events: runner.traced.map((h) => h.ev),
+      events: runner.traced.map((hit) => hit.ev),
       steps: stepResults,
-      frames: cast.frames(),
+      frames: screencaster.frames(),
       traced: runner.traced,
       ...(runner.finalUrl ? { finalUrl: runner.finalUrl } : {}),
       ...(fatal ? { fatal } : {}),

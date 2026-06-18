@@ -12,11 +12,11 @@ export type CodeGraphProviderName = (typeof CODEGRAPH_PROVIDERS)[number];
  * the seam so additional analyzers (e.g. an SCIP indexer) can be added behind the same interface.
  */
 export function createCodeGraphProvider(name?: string): CodeGraphProvider {
-  const n = (name ?? process.env.TRACE_CODEGRAPH_PROVIDER ?? "lsp").toLowerCase();
-  switch (n) {
+  const normalizedName = (name ?? process.env.TRACE_CODEGRAPH_PROVIDER ?? "lsp").toLowerCase();
+  switch (normalizedName) {
     case "lsp":
       return new LspCodeGraphProvider();
     default:
-      throw new Error(`unknown code-graph provider "${n}" — known: ${CODEGRAPH_PROVIDERS.join(", ")}`);
+      throw new Error(`unknown code-graph provider "${normalizedName}" — known: ${CODEGRAPH_PROVIDERS.join(", ")}`);
   }
 }

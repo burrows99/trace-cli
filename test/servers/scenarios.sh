@@ -11,7 +11,7 @@
 #
 # Then:  bash test/servers/scenarios.sh        # open http://localhost:4747 to watch them land live
 set -u
-T="node bin/trace dynamic"
+T="node bin/trace run"
 # Emission to the collector is driven by TRACE_COLLECTOR_URL (every run POSTs its envelope); export it so the
 # CLI sees it. (There is no --emit flag — the env var is the contract; see README.)
 export TRACE_COLLECTOR_URL="${TRACE_COLLECTOR_URL:-http://localhost:4747}"
@@ -23,16 +23,16 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-minioadmin}"
 echo "# 1 — Node checkout subtotal loop: subtotal accumulates per line item → LINEAGE (coupon bug shows in the response)"
 $T --node 9230 --max-hits 10 \
   --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1,gizmo:3&coupon=SAVE10&region=US"' \
-  --bp "test/servers/node-api/server.js@subtotal += it.lineTotal" \
-  --expr subtotal --expr 'it.sku' --expr 'it.lineTotal'
+  --breakpoint "test/servers/node-api/server.js@subtotal += it.lineTotal" \
+  --expression subtotal --expression 'it.sku' --expression 'it.lineTotal'
 
 echo "# 2 — Node error: unknown region → throws → 502 (bad input visible just before the throw)"
 $T --node 9230 \
   --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2&coupon=SAVE10&region=MARS"' \
-  --bp "test/servers/node-api/server.js@const rate = RATES[region]" --expr region --expr 'Object.keys(RATES)'
+  --breakpoint "test/servers/node-api/server.js@const rate = RATES[region]" --expression region --expression 'Object.keys(RATES)'
 
 echo "# 3 — React parseInt bug: cart total drops the cents (sum: 0 → 19 → 43); records a video to S3"
 $T --chrome 9334 --url http://localhost:5180 --root test/servers/react-app --max-hits 5 \
-  --bp "src/price.ts@sum = sum + parseInt" --expr sum --expr 'it.lineTotal'
+  --breakpoint "src/price.ts@sum = sum + parseInt" --expression sum --expression 'it.lineTotal'
 
 echo "# done — open $C"

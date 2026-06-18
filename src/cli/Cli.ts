@@ -1,5 +1,8 @@
 import { Command, CommanderError } from "commander";
 import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { DynamicCommand, type DynamicTargetKind } from "./commands/DynamicCommand.js";
 import { GraphCommand } from "./commands/GraphCommand.js";
@@ -19,34 +22,62 @@ import { TargetKind } from "../domain/Target.js";
 import { Diagnostic } from "../domain/Diagnostic.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
 import { DynamicInput, GraphInput, validateSteps } from "./CommandInputs.js";
-import { EntryRef } from "../codegraph/CodeGraphProvider.js";
+import { EntryReference } from "../codegraph/CodeGraphProvider.js";
 import { logger } from "../shared/logger.js";
+import { Code } from "../shared/codes.js";
 import type { Trace } from "../domain/Trace.js";
 
 const log = logger.child({ component: "cli" });
-const int = (v: string) => parseInt(v, 10);
-const collect = (v: string, acc: string[]) => { acc.push(v); return acc; };
-const usage = (msg: string): never => { process.stderr.write(`trace-cli: ${msg}\n`); process.exit(2); };
+const parseIntArg = (value: string) => parseInt(value, 10);
+const collect = (value: string, accumulator: string[]) => { accumulator.push(value); return accumulator; };
+const usage = (message: string): never => { process.stderr.write(`trace-cli: ${message}\n`); process.exit(2); };
 
-function pickTarget(o: any): { target: DynamicTargetKind; port: number; launch: boolean } {
-  if (o.chrome != null) {
-    const launch = o.chrome === true; // bare `--chrome` (no port) → launch a throwaway headless Chrome
-    return { target: TargetKind.Chrome, port: launch ? 0 : int(o.chrome), launch };
+function pickTarget(options: any): { target: DynamicTargetKind; port: number; launch: boolean } {
+  if (options.chrome != null) {
+    const launch = options.chrome === true; // bare `--chrome` (no port) → launch a throwaway headless Chrome
+    return { target: TargetKind.Chrome, port: launch ? 0 : parseIntArg(options.chrome), launch };
   }
-  return { target: TargetKind.Node, port: o.node === undefined || o.node === true ? DEFAULT_NODE_PORT : int(o.node), launch: false };
+  return { target: TargetKind.Node, port: options.node === undefined || options.node === true ? DEFAULT_NODE_PORT : parseIntArg(options.node), launch: false };
+}
+
+/**
+ * condense — trim the JSON envelope to high-signal fields for token-tight agent consumption (the `--concise`
+ * flag). Per breakpoint hit, the locals object (the firehose) collapses to its key names and the call stack
+ * caps at the top frames, each with a count so nothing looks complete-but-truncated; watched `--expression` values
+ * and the location/label/timing are kept verbatim. Mutates only the plain `json` (not the rich Trace the human
+ * renderer reads), and no-ops on envelopes without breakpoint events (the static analyses). Re-run `--detailed`
+ * for everything. The trimmed envelope still satisfies the schema (`attributes` is an open object).
+ */
+const CONCISE_STACK_FRAMES = 2;
+export function condense(json: Record<string, unknown>): Record<string, unknown> {
+  const events = (json.data as any)?.events;
+  if (!Array.isArray(events)) return json;
+  for (const event of events) {
+    const attributes = event?.attributes;
+    if (!attributes || typeof attributes !== "object") continue;
+    if (attributes.locals && typeof attributes.locals === "object") {
+      attributes.localsKeys = Object.keys(attributes.locals);   // values dropped; names kept so the agent knows what to re-fetch
+      delete attributes.locals;
+    }
+    if (Array.isArray(attributes.stack) && attributes.stack.length > CONCISE_STACK_FRAMES) {
+      attributes.stackDepth = attributes.stack.length;
+      attributes.stack = attributes.stack.slice(0, CONCISE_STACK_FRAMES);
+    }
+  }
+  return json;
 }
 
 /** emit policy: bare --json → JSON to stdout; --json <path> → file (stdout stays human); else human. */
-function emit(trace: Trace, humanFn: () => string, o: any): void {
+function emit(trace: Trace, renderHuman: () => string, options: any): void {
   // Enforce the envelope contract before it leaves the process: structural violations become error
   // diagnostics (and flip `ok`/exit code) instead of shipping a silently-malformed Trace.
-  for (const problem of trace.validate()) trace.diagnostics.push(Diagnostic.error("E_SCHEMA", problem));
+  for (const problem of trace.validate()) trace.diagnostics.push(Diagnostic.error(Code.SCHEMA, problem));
   trace.ok = !trace.hasErrors();
-  const json = trace.toJSON();
-  const toFile = typeof o.json === "string";
-  if (toFile) writeFileSync(o.json, JSON.stringify(json, null, 2));
-  process.stdout.write((o.json === true ? JSON.stringify(json, null, 2) : humanFn()) + "\n");
-  if (toFile) log.info("envelope written", { path: o.json });
+  const json = options.concise ? condense(trace.toJSON()) : trace.toJSON();
+  const writeToFile = typeof options.json === "string";
+  if (writeToFile) writeFileSync(options.json, JSON.stringify(json, null, 2));
+  process.stdout.write((options.json === true ? JSON.stringify(json, null, 2) : renderHuman()) + "\n");
+  if (writeToFile) log.info("envelope written", { path: options.json });
 }
 
 /**
@@ -56,19 +87,20 @@ function emit(trace: Trace, humanFn: () => string, o: any): void {
 export class Cli {
   #dynamic = new DynamicCommand(new Tracer(), new S3ArtifactStore());
 
-  async #runDynamic(o: any): Promise<void> {
-    if (o.chrome != null && o.node != null) usage("pick one target: --node or --chrome, not both");
-    const { target, port, launch } = pickTarget(o);
+  async #runDynamic(options: any): Promise<void> {
+    if (options.chrome != null && options.node != null) usage("pick one target: --node or --chrome, not both");
+    if (options.concise && options.detailed) usage("pick one envelope verbosity: --concise or --detailed, not both");
+    const { target, port, launch } = pickTarget(options);
     const isChrome = target === TargetKind.Chrome;
-    if (!o.bp.length) usage("dynamic needs at least one --bp (file:line or file@substring)");
+    if (!options.breakpoint.length) usage("run needs at least one --breakpoint (file:line or file@substring)");
     // Chrome trigger = an ordered UI journey; --url is shorthand for a leading `goto:`. Node trigger = a curl.
-    const steps: string[] = isChrome ? [...(o.url ? [`goto:${o.url}`] : []), ...o.step] : [];
+    const steps: string[] = isChrome ? [...(options.url ? [`goto:${options.url}`] : []), ...options.step] : [];
     if (isChrome && !steps.length) usage("chrome target needs --url or at least one --step");
-    if (isChrome && o.curl) usage("--curl is a node-only trigger (chrome uses --url/--step)");
-    if (!isChrome && o.step.length) usage("--step is a chrome-only trigger (node uses --curl)");
-    if (!isChrome && !o.curl) usage(`${target} target needs --curl`);
+    if (isChrome && options.curl) usage("--curl is a node-only trigger (chrome uses --url/--step)");
+    if (!isChrome && options.step.length) usage("--step is a chrome-only trigger (node uses --curl)");
+    if (!isChrome && !options.curl) usage(`${target} target needs --curl`);
 
-    const input = new DynamicInput({ target, port, launch, breakpoints: o.bp, exprs: o.expr, steps, curl: o.curl });
+    const input = new DynamicInput({ target, port, launch, breakpoints: options.breakpoint, exprs: options.expression, steps, curl: options.curl });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
 
@@ -79,78 +111,101 @@ export class Cli {
 
     // Redact secrets before they reach the envelope's meta.args: a `type:` step carries typed text (passwords),
     // an `eval:` step an arbitrary script body.
-    const safeStep = (s: string) => s.startsWith("type:") ? s.replace(/=.*/s, "=***") : s.startsWith("eval:") ? "eval:***" : s;
+    const redactStep = (step: string) => step.startsWith("type:") ? step.replace(/=.*/s, "=***") : step.startsWith("eval:") ? "eval:***" : step;
 
     // --emit <url> (or TRACE_COLLECTOR_URL) → stream to the collector. Emits are serialized through one promise
     // chain so a slow POST can't land a stale (smaller) envelope after a newer one; each ingest upserts the
     // session row (keyed on sessionId) and re-broadcasts over SSE, so the dashboard updates live as it runs.
-    const collector = o.emit ?? process.env.TRACE_COLLECTOR_URL;
-    let chain: Promise<unknown> = Promise.resolve();
-    const pump = collector ? (env: unknown) => { chain = chain.then(() => Collector.emit(collector, env).catch(() => false)); } : undefined;
+    const collector = options.emit ?? process.env.TRACE_COLLECTOR_URL;
+    let emitChain: Promise<unknown> = Promise.resolve();
+    const emitToCollector = collector ? (envelope: unknown) => { emitChain = emitChain.then(() => Collector.emit(collector, envelope).catch(() => false)); } : undefined;
 
     const { trace } = await this.#dynamic.run({
       target, port, launch,
-      breakpoints: o.bp, exprs: o.expr,
-      steps, curl: o.curl,
-      root: o.root, maxHits: o.maxHits,
-      recordOut: o.out,
-      args: { target, ...(launch ? { launch: true } : { port }), bp: o.bp, ...(o.root ? { root: o.root } : {}), ...(o.maxHits ? { maxHits: o.maxHits } : {}), ...(steps.length ? { steps: steps.map(safeStep) } : {}), ...(o.curl ? { curl: o.curl } : {}) },
-      ...(pump ? { onProgress: (t: Trace) => pump(t.toJSON()) } : {}),
+      breakpoints: options.breakpoint, exprs: options.expression,
+      steps, curl: options.curl,
+      root: options.root, maxHits: options.maxHits,
+      recordOut: options.output,
+      args: { target, ...(launch ? { launch: true } : { port }), breakpoints: options.breakpoint, ...(options.root ? { root: options.root } : {}), ...(options.maxHits ? { maxHits: options.maxHits } : {}), ...(steps.length ? { steps: steps.map(redactStep) } : {}), ...(options.curl ? { curl: options.curl } : {}) },
+      ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
     });
 
-    emit(trace, () => this.#dynamic.render(trace), o);
-    if (pump) { pump(trace.toJSON()); await chain; }   // final, complete envelope; then flush all pending emits
+    emit(trace, () => this.#dynamic.render(trace), options);
+    if (emitToCollector) { emitToCollector(trace.toJSON()); await emitChain; }   // final, complete envelope; then flush all pending emits
     process.exit(trace.hasErrors() ? 1 : 0);
   }
 
-  async #runGraph(o: any): Promise<void> {
-    const entry = EntryRef.parse(o.entry);
-    const input = new GraphInput({ file: entry.file, line: entry.line, col: entry.col, symbol: entry.symbol, depth: o.depth });
+  async #runGraph(options: any): Promise<void> {
+    const entry = EntryReference.parse(options.entry);
+    const input = new GraphInput({ file: entry.file, line: entry.line, column: entry.column, symbol: entry.symbol, depth: options.depth });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
 
-    const cmd = new GraphCommand();
-    const trace = await cmd.run({
+    const command = new GraphCommand();
+    const trace = await command.run({
       entry,
-      root: o.root, // optional — GraphCommand auto-detects the project root from the entry when absent
-      maxDepth: o.depth,
-      server: o.server,
-      args: { entry: o.entry, ...(o.root ? { root: o.root } : {}), ...(o.server ? { server: o.server } : {}), depth: o.depth },
+      root: options.root, // optional — GraphCommand auto-detects the project root from the entry when absent
+      maxDepth: options.depth,
+      server: options.server,
+      args: { entry: options.entry, ...(options.root ? { root: options.root } : {}), ...(options.server ? { server: options.server } : {}), depth: options.depth },
     });
 
-    emit(trace, () => cmd.render(trace), o);
+    emit(trace, () => command.render(trace), options);
+    // --html [path] → also write the interactive call-graph diagram (force-directed nodes + edges). Bare flag →
+    // a temp file; the path is logged to stderr (like --json <path>) so stdout stays the pure envelope/human channel.
+    if (options.html != null) {
+      const htmlPath = typeof options.html === "string" ? options.html : join(tmpdir(), `trace-graph-${randomUUID()}.html`);
+      writeFileSync(htmlPath, command.renderHtml(trace));
+      log.info("graph HTML written", { path: htmlPath });
+    }
     const collector = process.env.TRACE_COLLECTOR_URL;
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
   }
 
   /** Shared tail for the static analyses: emit the envelope, forward to a collector, exit on the error state. */
-  async #finish(trace: Trace, render: () => string, o: any): Promise<never> {
-    emit(trace, render, o);
+  async #finish(trace: Trace, render: () => string, options: any): Promise<never> {
+    emit(trace, render, options);
     const collector = process.env.TRACE_COLLECTOR_URL;
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
   }
 
-  async #runDeps(o: any): Promise<void> {
-    if (!o.entry) usage("static deps needs --entry <file|dir>");
-    const cmd = new DepsCommand();
-    const trace = await cmd.run({ entry: o.entry, root: o.root, args: { entry: o.entry, ...(o.root ? { root: o.root } : {}) } });
-    await this.#finish(trace, () => cmd.render(trace), o);
+  async #runDeps(options: any): Promise<void> {
+    if (!options.entry) usage("deps needs --entry <file|dir>");
+    const command = new DepsCommand();
+    const trace = await command.run({
+      entry: options.entry,
+      root: options.root,
+      extensions: options.extensions,
+      tsConfig: options.tsconfig,
+      exclude: options.exclude,
+      args: { entry: options.entry, ...(options.root ? { root: options.root } : {}) },
+    });
+    emit(trace, () => command.render(trace), options);
+    // --html [path] → also write the whole module graph as the interactive diagram (same renderer as `graph`).
+    if (options.html != null) {
+      const htmlPath = typeof options.html === "string" ? options.html : join(tmpdir(), `trace-deps-${randomUUID()}.html`);
+      writeFileSync(htmlPath, command.renderHtml(trace));
+      log.info("deps HTML written", { path: htmlPath });
+    }
+    const collector = process.env.TRACE_COLLECTOR_URL;
+    if (collector) await Collector.emit(collector, trace.toJSON());
+    process.exit(trace.hasErrors() ? 1 : 0);
   }
 
-  async #runComplexity(path: string, o: any): Promise<void> {
-    const p = path || ".";
-    const cmd = new ComplexityCommand();
-    const trace = await cmd.run({ path: p, root: o.root, args: { path: p, ...(o.root ? { root: o.root } : {}) } });
-    await this.#finish(trace, () => cmd.render(trace), o);
+  async #runComplexity(path: string, options: any): Promise<void> {
+    const resolvedPath = path || ".";
+    const command = new ComplexityCommand();
+    const trace = await command.run({ path: resolvedPath, root: options.root, args: { path: resolvedPath, ...(options.root ? { root: options.root } : {}) } });
+    await this.#finish(trace, () => command.render(trace), options);
   }
 
-  async #runSymbols(file: string, o: any): Promise<void> {
-    if (!file) usage("static symbols needs a <file>");
-    const cmd = new SymbolsCommand();
-    const trace = await cmd.run({ file, root: o.root, args: { file, ...(o.root ? { root: o.root } : {}) } });
-    await this.#finish(trace, () => cmd.render(trace), o);
+  async #runSymbols(file: string, options: any): Promise<void> {
+    if (!file) usage("symbols needs a <file>");
+    const command = new SymbolsCommand();
+    const trace = await command.run({ file, root: options.root, args: { file, ...(options.root ? { root: options.root } : {}) } });
+    await this.#finish(trace, () => command.render(trace), options);
   }
 
   build(): Command {
@@ -160,73 +215,77 @@ export class Cli {
       .version(VERSION)
       .showHelpAfterError("(add --help for usage)");
 
-    program.command("dynamic")
-      .description("breakpoints + a trigger → a full execution trace. Node (CDP): a --curl trigger. Chrome (CDP): a scripted UI journey (--url/--step) recorded as a screen + trace-panel replay — debug and video together.")
+    program.command("run")
+      .description("breakpoints + a trigger → a full execution trace. Breakpoints are non-pausing logpoints: each hit ships its stack + in-scope locals + exprs without halting the VM, so the app runs at full speed. Node (CDP): a --curl trigger. Chrome (CDP): a scripted UI journey (--url/--step) recorded as a screen + trace-panel replay — debug and video together.")
       .option("--node [port]", `Node --inspect target (default; port ${DEFAULT_NODE_PORT})`)
       .option("--chrome [port]", "Chrome target: a running browser's --remote-debugging-port, or omit the port to launch a throwaway headless Chrome")
-      .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring", collect, [])
-      .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
-      .option("--root <dir>", "project root for resolving --bp file paths and source maps (default: cwd) — needed when a file@substring breakpoint or a built app's sources live outside cwd")
-      .option("--max-hits <n>", "stop after this many breakpoint hits (default: node 25, chrome 30)", int)
+      .option("--breakpoint <file:line>", "breakpoint, repeatable: file:line or file@substring (non-pausing; in-scope locals are captured automatically)", collect, [])
+      .option("--expression <js>", "extra expression captured at every hit, repeatable — for computed/derived values beyond the auto-captured locals (e.g. user.id, cart.length)", collect, [])
+      .option("--root <dir>", "project root for resolving --breakpoint file paths and source maps (default: cwd) — needed when a file@substring breakpoint or a built app's sources live outside cwd")
+      .option("--max-hits <n>", "stop after this many breakpoint hits (default: 100; non-pausing logpoints, so a hot path is cheap to raise)", parseIntArg)
       .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")
       .option("--url <url>", "chrome trigger shorthand: a page URL to navigate (equivalent to --step goto:<url>)")
       .option("--step <s>", "chrome journey step, repeatable & ordered: goto:<url> · click:<sel> · type:<sel>=<text> · waitfor:<sel> · wait:<ms> · newtab · eval:<js>  (sel: CSS or text=…)", collect, [])
-      .option("--out <mp4>", "chrome: output path for the screen + trace-panel recording (default: a temp file)")
+      .option("--output <mp4>", "chrome: output path for the screen + trace-panel recording (default: a temp file)")
       .option("--emit <url>", "stream the trace to a collector (POST /v1/traces) — the session appears live as it runs (default: env TRACE_COLLECTOR_URL)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .action((o) => this.#runDynamic(o));
+      .option("--concise", "trim the --json envelope for token-tight agent reads: per hit, locals collapse to key names and the call stack keeps its top 2 frames (watched --expression values, location & timing kept). Re-run --detailed for everything.")
+      .option("--detailed", "full --json envelope: every local's value and the complete call stack at each hit (the default)")
+      .action((options) => this.#runDynamic(options));
 
-    // static analysis — code structure without running the app. Each subcommand shells out to one analyzer
-    // and emits the same Trace envelope as the runtime `dynamic` command (call graph · deps · complexity · symbols).
-    const stat = program.command("static")
-      .description("static analysis — code structure without running the app (call graph · deps · complexity · symbols)");
-
-    stat.command("graph")
+    // static analysis — code structure without running the app. Each command shells out to one analyzer and
+    // emits the same Trace envelope as the runtime `run` command (call graph · deps · complexity · symbols).
+    program.command("graph")
       .description("call graph rooted at an entry → the flow tree for a function/route, via LSP call hierarchy")
-      .requiredOption("--entry <ref>", "where to start: file:line, file:line:col, or file@symbol (e.g. src/auth.service.ts:42:9 or src/auth.service.ts@exchangeToken)")
+      .requiredOption("--entry <ref>", "where to start: file:line, file:line:column, or file@symbol (e.g. src/auth.service.ts:42:9 or src/auth.service.ts@exchangeToken)")
       .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git above the entry)")
       .option("--server <cmd>", "override the LSP server (default: auto by file extension; bundled typescript-language-server for TS/JS, e.g. \"gopls\", \"pyright --stdio\")")
-      .option("--depth <n>", "max call depth expanded from the entry", int, 6)
+      .option("--depth <n>", "max call depth expanded from the entry", parseIntArg, 6)
+      .option("--html [path]", "also write an interactive call-graph diagram — nodes & edges, force-directed (to a file if a path is given, else a temp file)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .action((o) => this.#runGraph(o));
+      .action((options) => this.#runGraph(options));
 
-    stat.command("deps")
+    program.command("deps")
       .description("module-import graph (+ circular-dependency groups) via madge")
       .requiredOption("--entry <path>", "file or directory whose import graph to build")
       .option("--root <dir>", "working directory for madge (default: cwd)")
+      .option("--extensions <list>", "comma-separated file extensions to scan (default: ts,tsx,js,jsx,mjs,cjs)")
+      .option("--tsconfig <path>", "tsconfig for path-alias resolution (default: auto-detected near root/entry)")
+      .option("--exclude <regexp>", "drop module paths matching this regexp (madge --exclude), e.g. \"(^|/)dist/\" to skip build output")
+      .option("--html [path]", "also write the whole module graph as an interactive node-and-edge diagram (to a file if a path is given, else a temp file)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .action((o) => this.#runDeps(o));
+      .action((options) => this.#runDeps(options));
 
-    stat.command("complexity")
+    program.command("complexity")
       .description("per-function cyclomatic complexity via lizard")
       .argument("[path]", "file or directory to analyze (default: current directory)", ".")
       .option("--root <dir>", "working directory for lizard (default: cwd)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .action((path, o) => this.#runComplexity(path, o));
+      .action((path, options) => this.#runComplexity(path, options));
 
-    stat.command("symbols")
+    program.command("symbols")
       .description("top-level definitions (functions/classes/types) in a file via tree-sitter")
       .argument("<file>", "source file to outline")
       .option("--root <dir>", "working directory / project root (default: cwd)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .action((file, o) => this.#runSymbols(file, o));
+      .action((file, options) => this.#runSymbols(file, options));
 
     program.command("doctor")
       .description("report which backing tools are installed (+ versions), grouped by pillar")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .action(async (o) => {
-        const cmd = new DoctorCommand();
-        const trace = await cmd.run();
-        emit(trace, () => cmd.render(trace), o);
+      .action(async (options) => {
+        const command = new DoctorCommand();
+        const trace = await command.run();
+        emit(trace, () => command.render(trace), options);
         process.exit(0);
       });
 
     program.command("serve")
       .description("collector + realtime UI: ingest envelopes (POST /v1/traces) and show all traces live")
-      .option("--port <n>", "port to listen on", int, DEFAULT_COLLECTOR_PORT)
+      .option("--port <n>", "port to listen on", parseIntArg, DEFAULT_COLLECTOR_PORT)
       .option("--host <h>", "host to bind (default 0.0.0.0)")
-      .option("--db <url>", "Postgres connection string to persist sessions (env DATABASE_URL/POSTGRES_URL)")
-      .action((o) => new ServeCommand().run({ port: o.port, host: o.host, databaseUrl: o.db }));
+      .option("--database-url <url>", "Postgres connection string to persist sessions (env DATABASE_URL/POSTGRES_URL)")
+      .action((options) => new ServeCommand().run({ port: options.port, host: options.host, databaseUrl: options.databaseUrl }));
 
     program.command("schema")
       .description("print the output JSON Schema (the contract every Trace conforms to)")
@@ -243,14 +302,14 @@ export class Cli {
       .description("copy the bundled `trace` skill into a project's .claude/skills/ so Claude Code picks it up")
       .argument("[dir]", "target project root (default: current directory)")
       .option("--force", "overwrite an existing .claude/skills/trace")
-      .action((dir, o) => {
+      .action((dir, options) => {
         try {
-          const { src, dest } = new ExportSkillCommand().run({ dir, force: o.force });
-          process.stdout.write(`[trace-cli] skill exported → ${dest}\n`);
-          log.info("skill exported", { src, dest });
+          const { src: source, dest: destination } = new ExportSkillCommand().run({ dir, force: options.force });
+          process.stdout.write(`[trace-cli] skill exported → ${destination}\n`);
+          log.info("skill exported", { src: source, dest: destination });
           process.exit(0);
-        } catch (e: any) {
-          process.stderr.write(`trace-cli: ${e.message}\n`);
+        } catch (error: any) {
+          process.stderr.write(`trace-cli: ${error.message}\n`);
           process.exit(1);
         }
       });
@@ -262,12 +321,12 @@ export class Cli {
     const program = this.build().exitOverride();
     try {
       await program.parseAsync(argv);
-    } catch (err: any) {
-      if (err instanceof CommanderError) {
-        if (["commander.help", "commander.helpDisplayed", "commander.version"].includes(err.code)) process.exit(0);
+    } catch (error: any) {
+      if (error instanceof CommanderError) {
+        if (["commander.help", "commander.helpDisplayed", "commander.version"].includes(error.code)) process.exit(0);
         process.exit(2);
       }
-      process.stderr.write(`trace-cli: ${err?.message || err}\n`);
+      process.stderr.write(`trace-cli: ${error?.message || error}\n`);
       process.exit(1);
     }
   }

@@ -2,13 +2,13 @@ import { performance } from "node:perf_hooks";
 
 import { Trace, TraceMeta, TraceData } from "../../domain/Trace.js";
 import type { Diagnostic } from "../../domain/Diagnostic.js";
-import type { TargetRef } from "../../domain/Target.js";
+import type { TargetReference } from "../../domain/Target.js";
 import { VERSION } from "../../shared/version.js";
 import { CliCommand } from "./CliCommand.js";
 
 /** The command-specific pieces of a Trace; {@link TraceCommand.envelope} stamps everything common around them. */
 export interface Envelope {
-  command: string;                          // e.g. "dynamic.node", "graph.lsp", "doctor"
+  command: string;                          // e.g. "run.node", "graph.lsp", "doctor"
   data: TraceData;
   diagnostics?: Diagnostic[];
   ok?: boolean;                             // default: true unless a diagnostic is an error
@@ -17,7 +17,7 @@ export interface Envelope {
   sessionId?: string;
   args?: Record<string, unknown>;
   toolVersions?: Record<string, string>;
-  target?: TargetRef | null;
+  target?: TargetReference | null;
 }
 
 /**
@@ -34,24 +34,36 @@ export abstract class TraceCommand<Req = void, Res = Trace> extends CliCommand<R
   }
 
   /** Wrap a command's payload + diagnostics in the common Trace envelope. */
-  protected envelope(e: Envelope): Trace {
-    const diagnostics = e.diagnostics ?? [];
+  protected envelope(envelopeSpec: Envelope): Trace {
+    const diagnostics = envelopeSpec.diagnostics ?? [];
     return new Trace({
       version: VERSION,
-      command: e.command,
-      ok: e.ok ?? !diagnostics.some((d) => d.level === "error"),
+      command: envelopeSpec.command,
+      ok: envelopeSpec.ok ?? !diagnostics.some((diagnostic) => diagnostic.level === "error"),
       meta: new TraceMeta({
         at: new Date().toISOString(),
-        ...(e.sessionId ? { sessionId: e.sessionId } : {}),
-        ...(e.args ? { args: e.args } : {}),
-        ...(e.toolVersions ? { toolVersions: e.toolVersions } : {}),
-        ...(e.running ? { running: true } : {}),
-        ...(e.startedAtMs !== undefined ? { durationMs: Math.round(performance.now() - e.startedAtMs) } : {}),
+        ...(envelopeSpec.sessionId ? { sessionId: envelopeSpec.sessionId } : {}),
+        ...(envelopeSpec.args ? { args: envelopeSpec.args } : {}),
+        ...(envelopeSpec.toolVersions ? { toolVersions: envelopeSpec.toolVersions } : {}),
+        ...(envelopeSpec.running ? { running: true } : {}),
+        ...(envelopeSpec.startedAtMs !== undefined ? { durationMs: Math.round(performance.now() - envelopeSpec.startedAtMs) } : {}),
       }),
-      target: e.target ?? null,
-      data: e.data,
+      target: envelopeSpec.target ?? null,
+      data: envelopeSpec.data,
       diagnostics,
     });
+  }
+
+  /**
+   * Shared empty/error guard for `render()`. When the trace has no usable payload, returns the one-line human
+   * string every command rendered the same way — `"<label> — failed: <msg>"` if a diagnostic is an error,
+   * else `"<label> — <emptyNote>"`. Returns `undefined` when a payload IS present, so the caller renders it.
+   * Collapses the copy that lived in graph/deps/complexity/symbols into one place.
+   */
+  protected emptyRender(trace: Trace, hasPayload: boolean, label: string, emptyNote: string): string | undefined {
+    if (hasPayload) return undefined;
+    const errorDiagnostic = trace.diagnostics.find((diagnostic) => diagnostic.level === "error");
+    return errorDiagnostic ? `${label} — failed: ${errorDiagnostic.message}` : `${label} — ${emptyNote}`;
   }
 
   /** The human-readable view of a finished Trace (what prints when `--json` is off). */
