@@ -6,28 +6,25 @@ allowed-tools: Bash(node:*), Bash(trace-cli:*), Read
 
 # trace-cli — unified execution tracer for Node & Chrome
 
-`trace-cli` attaches to an already-running debug target, sets breakpoints, fires a trigger, and prints the
-full execution trace in one shot. One engine, one protocol driver — **CDP** for Node and Chrome. You read
-the trace; you never drive the debugger by hand.
-
-Two things beyond attaching:
-- **Chrome can auto-launch.** `--chrome <port>` attaches to a browser you started (a real, logged-in session); `--chrome` with **no** port launches a throwaway headless Chrome, traces, records, and tears it down — so a frontend trace needs only the app running, not a hand-started browser.
-- **`trace-cli static` needs no running app.** Its `graph` analysis builds a call graph — the flow tree for a function or route — by driving a language server over **LSP call hierarchy**; use it to map what a route/function calls, and to find good breakpoint coordinates before a dynamic trace. TS/JS work out of the box; other languages via `--server <cmd>` (`gopls`, `pyright --stdio`, `rust-analyzer`, `clangd`) — the server must be installed and expose `callHierarchyProvider`. The group also has `deps` (imports), `complexity` and `symbols`; run `trace-cli static --help`.
+- Attaches to a running debug target, sets breakpoints, fires a trigger, prints the full execution trace in one shot. One engine, one protocol driver — **CDP** for Node and Chrome. You read the trace; you never drive the debugger by hand.
+- **Chrome can auto-launch:** `--chrome <port>` attaches to a browser you started (a real, logged-in session); bare `--chrome` (no port) launches a throwaway headless Chrome, traces, records, and tears it down — a frontend trace needs only the app running.
+- **`trace-cli static` needs no running app:** `graph` is a call graph (flow tree) via **LSP call hierarchy** — map what a route/function calls, and find breakpoint coordinates before a dynamic trace. TS/JS bundled; other languages via `--server` (`gopls` · `pyright --stdio` · `rust-analyzer` · `clangd`, must expose `callHierarchyProvider`). The group also has `deps`/`complexity`/`symbols` — run `trace-cli static --help`.
 
 ## Invoking (do this first)
-The CLI ships as a bundled binary — Claude substitutes `${CLAUDE_PLUGIN_ROOT}`. Define a shell **function**
-once (works in bash **and** zsh — do **not** use a `trace=…` string variable: zsh won't word-split it, so
-`$trace --help` fails with "command not found"):
+
+- The CLI ships as a bundled binary; Claude substitutes `${CLAUDE_PLUGIN_ROOT}`. Define a shell **function** once (works in bash **and** zsh):
+
 ```bash
 trace-cli() { node "${CLAUDE_PLUGIN_ROOT}/bin/trace" "$@"; }
 ```
-If the package is installed globally (`npm i -g trace-cli`), the bare `trace-cli` command works too — same
-name either way. (It's `trace-cli`, not `trace`, to avoid colliding with macOS's `/usr/bin/trace`.)
+
+- Do **not** use a `trace=…` string variable — zsh won't word-split it, so `$trace --help` fails with "command not found".
+- Installed globally (`npm i -g trace-cli`)? The bare `trace-cli` works too. (It's `trace-cli`, not `trace`, to avoid colliding with macOS's `/usr/bin/trace`.)
 
 ## Let the CLI tell you how to run it — read it from the binary
-This skill deliberately does **not** list commands, flags, arguments, or output fields: that knowledge is
-generated from the CLI itself, so it can never drift from the installed version. Ask the binary for the
-context you need — these self-describing commands are the source of truth:
+
+- This skill deliberately does **not** list commands, flags, arguments, or output fields — that knowledge is generated from the CLI itself, so it can never drift from the installed version. These self-describing commands are the source of truth:
+
 ```bash
 trace-cli manifest          # structured JSON: every command, flag (defaults/choices/env vars) & argument — the input contract
 trace-cli --help            # the list of subcommands
@@ -35,6 +32,5 @@ trace-cli <command> --help  # how to run one command, e.g. `trace-cli dynamic --
 trace-cli schema            # the output JSON Schema every trace conforms to — the output contract
 trace-cli doctor            # which backing tools are installed (node, chrome, ffmpeg, …)
 ```
-Start with `trace-cli manifest` (to reason over the options programmatically) or `trace-cli <command> --help`
-(for a quick look). Whatever you need to know about how to execute `trace-cli`, get it from there — not from
-this file.
+
+- Start with `trace-cli manifest` (to reason over the options programmatically) or `trace-cli <command> --help` (for a quick look). Whatever you need to know about executing `trace-cli`, get it from there — not from this file.
