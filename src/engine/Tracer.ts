@@ -6,14 +6,15 @@ import { SourceMaps } from "./SourceMaps.js";
 import { BreakpointResolver } from "./BreakpointResolver.js";
 import { BpBinder } from "./BpBinder.js";
 import { EventCapturer, type CdpCtx } from "./EventCapturer.js";
-import { Screencaster } from "./Screencaster.js";
 import { CurlTrigger, type CurlResult } from "./CurlTrigger.js";
+import { Screencaster } from "./Screencaster.js";
+import { JourneyRunner, type StepResult, type TraceConfig } from "./JourneyRunner.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
 import { TargetKind } from "../domain/Target.js";
 import type { ConsoleLine, NetworkLine } from "../domain/Trace.js";
 import { sleep } from "../shared/sleep.js";
-import { DEFAULT_NODE_PORT, DEFAULT_CHROME_PORT, DEFAULT_ATTACH_TIMEOUT_MS, DEFAULT_POST_LOAD_IDLE_MS } from "../shared/defaults.js";
+import { DEFAULT_NODE_PORT, DEFAULT_CHROME_PORT, DEFAULT_ATTACH_TIMEOUT_MS } from "../shared/defaults.js";
 
 export interface CaptureResult {
   target: TargetKind;
@@ -29,6 +30,8 @@ export interface CaptureResult {
   frames?: { data: Buffer; t: number }[];
   /** breakpoint hits stamped with wall-clock time, so the replay can lay the trace panel beside each frame. */
   traced?: { ev: TraceEvent; t: number }[];
+  /** Chrome: the per-step outcome of the scripted journey (a failed step → a STEP_FAILED diagnostic). */
+  steps?: StepResult[];
   fatal?: string;
 }
 
@@ -99,15 +102,14 @@ interface CapturePlan {
   onCapture?(ev: TraceEvent): void;
 }
 
-const hostOf = (u: string) => { try { return new URL(u).host; } catch { return u; } };
-
 /**
- * Tracer — the trigger+capture engine. Depends on the CdpDriver (ProtocolDriver) via DIP; ONE capture loop
- * (#capture) drives both Node (CDP) and Chrome (CDP), parameterized by a CapturePlan. The shared contract
- * is "breakpoints are live before the traced code runs, then the trigger fires, then we capture" — Node
- * meets it by binding into an already-running process and curling; Chrome meets it by pausing between each
- * script's parse and execution so it binds before the page's first run (no warm-up, no reload). Produces
- * domain entities (TraceEvent, Breakpoint) — the command layer assembles them into a Trace.
+ * Tracer — the trigger+capture engine, one method per target, each returning a CaptureResult so the command
+ * layer treats targets symmetrically. Depends on the CdpDriver (ProtocolDriver) via DIP. `traceNode` binds
+ * into an already-running `--inspect` process and fires one curl through the shared `#capture` pump loop.
+ * `traceChrome` drives a scripted UI journey across tabs and records it — a fundamentally different control
+ * flow (multi-step, async, tab-following), so it delegates to JourneyRunner rather than the one-shot pump;
+ * the breakpoint primitives (BpBinder, EventCapturer, SourceMaps) are shared across both. Produces domain
+ * entities (TraceEvent, Breakpoint) — the command layer assembles them into a Trace.
  */
 export class Tracer {
   // ---- shared CDP helpers ----------------------------------------------------------------------
@@ -120,10 +122,6 @@ export class Tracer {
       prev = n;
       await sleep(100);
     }
-  }
-
-  async #snap(driver: CdpDriver): Promise<string | null> {
-    try { return (await driver.send(Cdp.Page.captureScreenshot, { format: "png" })).data; } catch { return null; }
   }
 
   // ---- the one capture loop, shared by every target -------------------------------------------
@@ -215,48 +213,39 @@ export class Tracer {
     return this.#capture(opts, plan);
   }
 
+  /**
+   * Chrome target: drive the scripted UI journey (`opts.steps`) with breakpoints armed on every tab and the
+   * screencast running throughout, so one run yields the trace events AND the frames/hits the recorder lays
+   * into a screen + trace-panel replay. Multi-step + tab-following needs JourneyRunner's async, sequential
+   * driver — not the single-trigger `#capture` pump — but the binding/capture primitives are the same.
+   */
   async traceChrome(opts: TraceOptions): Promise<CaptureResult> {
-    const { port = DEFAULT_CHROME_PORT, url, urlMatch, timeoutMs = 15000, shot, record = false } = opts;
-    if (!url) throw new Error("traceChrome requires a page url");
-    const result: CaptureResult = { target: TargetKind.Chrome, trigger: url, breakpoints: [], events: [], console: [], network: [] };
-    // record → run a motion screencast over the page and stamp each hit with wall-clock time, so the replay
-    // can lay the trace panel beside the live screen (same renderer as `journey`), not a static screenshot.
-    const cast = record ? new Screencaster() : null;
-    const traced: { ev: TraceEvent; t: number }[] = [];
-    let loaded = false;
-    let instrId: string | null = null;
-    const plan: CapturePlan = {
-      result,
-      resolveWs: () => CdpDriver.resolveWsUrl(port, { kind: TargetKind.Chrome, urlMatch: urlMatch || hostOf(url) }),
-      enableExtra: async (driver) => { await driver.send(Cdp.Page.enable); await driver.send(Cdp.Network.enable); if (cast) await cast.switch(driver); },
-      onCapture: (ev) => { if (cast) traced.push({ ev, t: Date.now() }); },
-      attach: (driver) => {
-        driver.on(Cdp.Runtime.consoleAPICalled, (p: any) => { if (["error", "warning"].includes(p.type)) result.console!.push({ type: p.type, text: (p.args || []).map((a: any) => a.value ?? a.description ?? a.type).join(" ").slice(0, 300) }); });
-        driver.on(Cdp.Runtime.exceptionThrown, (p: any) => result.console!.push({ type: "exception", text: String(p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || "").split("\n")[0].slice(0, 300) }));
-        driver.on(Cdp.Network.responseReceived, (p: any) => { const r = p.response; if (r && r.status >= 400) result.network!.push({ status: r.status, url: r.url }); });
-        driver.on(Cdp.Page.loadEventFired, () => { loaded = true; driver.interrupt(); });
-      },
-      arm: async (driver) => { const r = await driver.send(Cdp.Debugger.setInstrumentationBreakpoint, { instrumentation: "beforeScriptExecution" }); instrId = r?.breakpointId ?? null; },
-      instrumentation: true,
-      loaded: () => loaded,
-      fire: (driver, ctx) => { ctx.t0 = performance.now(); log(`navigating ${url} (trigger)`); driver.send(Cdp.Page.navigate, { url }).catch(() => {}); },
-      timeout: () => (loaded ? DEFAULT_POST_LOAD_IDLE_MS : timeoutMs),
-      stepTimeoutMs: timeoutMs,
-      stopOnInterrupt: false,
-      shouldStop: () => false,
-      removeInstr: async (driver) => { if (instrId) { const id = instrId; instrId = null; await driver.send(Cdp.Debugger.removeBreakpoint, { breakpointId: id }).catch(() => {}); } },
-      drain: async () => {},
-      finish: async (driver) => {
-        await driver.send(Cdp.Debugger.resume).catch(() => {});
-        await sleep(1500);
-        try { const u = await driver.send(Cdp.Runtime.evaluate, { expression: "location.href", returnByValue: true }); result.finalUrl = u.result?.value; } catch { /* ignore */ }
-        if (shot) {
-          const data = await this.#snap(driver);
-          if (data) { (await import("node:fs")).writeFileSync(shot, Buffer.from(data, "base64")); result.screenshot = shot; }
-        }
-        if (cast) { await cast.stop().catch(() => {}); result.frames = cast.frames(); result.traced = traced; }
-      },
+    const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 30, urlMatch } = opts;
+    const parsed = steps.map((s) => JourneyRunner.parseStep(s));
+    const cast = new Screencaster();
+    const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits };
+    const runner = new JourneyRunner(port, cast, config);
+    let stepResults: StepResult[] = [];
+    let fatal: string | undefined;
+    try {
+      await runner.start(urlMatch);
+      stepResults = await runner.run(parsed);
+    } catch (e: any) {
+      fatal = String(e?.message ?? e);
+    } finally {
+      await cast.stop().catch(() => {});
+      runner.close();
+    }
+    return {
+      target: TargetKind.Chrome,
+      trigger: parsed.find((s) => s.action === "goto")?.arg ?? `${parsed.length} steps`,
+      breakpoints: runner.breakpoints(),
+      events: runner.traced.map((h) => h.ev),
+      steps: stepResults,
+      frames: cast.frames(),
+      traced: runner.traced,
+      ...(runner.finalUrl ? { finalUrl: runner.finalUrl } : {}),
+      ...(fatal ? { fatal } : {}),
     };
-    return this.#capture(opts, plan);
   }
 }

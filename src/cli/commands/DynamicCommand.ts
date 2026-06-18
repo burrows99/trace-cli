@@ -44,26 +44,20 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
   async run(req: DynamicRequest): Promise<DynamicResult> {
     const startedAtMs = this.started();
     const sessionId = req.sessionId ?? randomUUID();
+    const isChrome = req.target === TargetKind.Chrome;
 
     // Chrome launch mode (`--chrome` with no port): spawn a throwaway headless Chrome to BE the trace target,
-    // then tear it down. Attach mode (`--chrome <port>`) skips this and uses the running browser as-is.
+    // then tear it down. Attach mode (`--chrome <port>`) uses the running browser as-is.
     let launched: LaunchedChrome | undefined;
     try {
-      let opts: TraceOptions = { ...req, sessionId, record: req.record };
-      if (req.target === TargetKind.Chrome && req.launch) {
-        launched = await ChromeLauncher.launch();
-        opts = { ...opts, port: launched.port };
-      }
+      let opts: TraceOptions = { ...req, sessionId };
+      if (isChrome && req.launch) { launched = await ChromeLauncher.launch(); opts = { ...opts, port: launched.port }; }
 
-      const capture =
-        req.target === TargetKind.Chrome ? await this.tracer.traceChrome(opts)
-        : await this.tracer.traceNode(opts);
-
+      // Both targets go through the engine the same way: one method, one CaptureResult. Chrome layers on the
+      // extra it alone supports — the screen + trace-panel recording.
+      const capture = isChrome ? await this.tracer.traceChrome(opts) : await this.tracer.traceNode(opts);
       const trace = this.#toTrace(capture, { sessionId, args: req.args ?? {}, startedAtMs });
-
-      if (req.target === TargetKind.Chrome && req.record !== false) {
-        await this.#record(capture, trace, sessionId, req.recordOut);
-      }
+      if (isChrome) await this.#record(capture, trace, sessionId, req.recordOut);
       return { trace, capture };
     } finally {
       launched?.kill();
@@ -74,6 +68,9 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     const source = "cdp";
     const diagnostics: Diagnostic[] = [];
     if (c.fatal) diagnostics.push(Diagnostic.error("ENGINE_FATAL", String(c.fatal).split("\n")[0]));
+    // A failed journey step (selector not found / timed out) flips the envelope's `ok` — same gate the old
+    // `journey` command applied to its exit code, now expressed as an error diagnostic.
+    for (const s of c.steps ?? []) if (!s.ok) diagnostics.push(Diagnostic.error("STEP_FAILED", `#${s.seq} ${s.step}${s.note ? " — " + s.note : ""}`));
     for (const b of c.breakpoints.filter((b) => !b.bound)) {
       diagnostics.push(Diagnostic.warn("BP_UNBOUND", `${b.file}:${b.line} did not bind${b.note ? " — " + b.note : ""}`));
     }
@@ -88,9 +85,9 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
       ...(c.finalUrl ? { finalUrl: c.finalUrl } : {}),
       ...(c.screenshot ? { screenshot: c.screenshot } : {}),
     });
+    // `ok` derives from the diagnostics: ENGINE_FATAL or STEP_FAILED (errors) flip it false; BP_UNBOUND (warn) doesn't.
     return this.envelope({
       command: `dynamic.${c.target}`,
-      ok: !c.fatal,
       data,
       diagnostics,
       sessionId: ctx.sessionId,

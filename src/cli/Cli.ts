@@ -2,7 +2,6 @@ import { Command, CommanderError } from "commander";
 import { writeFileSync } from "node:fs";
 
 import { DynamicCommand, type DynamicTargetKind } from "./commands/DynamicCommand.js";
-import { JourneyCommand } from "./commands/JourneyCommand.js";
 import { GraphCommand } from "./commands/GraphCommand.js";
 import { DoctorCommand } from "./commands/DoctorCommand.js";
 import { ExportSkillCommand } from "./commands/ExportSkillCommand.js";
@@ -16,7 +15,7 @@ import { VERSION } from "../shared/version.js";
 import { TargetKind } from "../domain/Target.js";
 import { Diagnostic } from "../domain/Diagnostic.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
-import { DynamicInput, JourneyInput, GraphInput } from "./CommandInputs.js";
+import { DynamicInput, GraphInput } from "./CommandInputs.js";
 import { EntryRef } from "../codegraph/CodeGraphProvider.js";
 import { logger } from "../shared/logger.js";
 import type { Trace } from "../domain/Trace.js";
@@ -58,42 +57,32 @@ export class Cli {
     const { target, port, launch } = pickTarget(o);
     const isChrome = target === TargetKind.Chrome;
     if (!o.bp.length) usage("dynamic needs at least one --bp (file:line or file@substring)");
-    if (isChrome && !o.url) usage("chrome target needs --url");
+    // Chrome trigger = an ordered UI journey; --url is shorthand for a leading `goto:`. Node trigger = a curl.
+    const steps: string[] = isChrome ? [...(o.url ? [`goto:${o.url}`] : []), ...o.step] : [];
+    if (isChrome && !steps.length) usage("chrome target needs --url or at least one --step");
+    if (!isChrome && o.step.length) usage("--step is a chrome-only trigger (node uses --curl)");
     if (!isChrome && !o.curl) usage(`${target} target needs --curl`);
 
-    const input = new DynamicInput({ target, port, launch, breakpoints: o.bp, exprs: o.expr, curl: o.curl, url: o.url });
+    const input = new DynamicInput({ target, port, launch, breakpoints: o.bp, exprs: o.expr, steps, curl: o.curl });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
+
+    // Redact secrets before they reach the envelope's meta.args: a `type:` step carries typed text (passwords),
+    // an `eval:` step an arbitrary script body.
+    const safeStep = (s: string) => s.startsWith("type:") ? s.replace(/=.*/s, "=***") : s.startsWith("eval:") ? "eval:***" : s;
 
     const { trace } = await this.#dynamic.run({
       target, port, launch,
       breakpoints: o.bp, exprs: o.expr,
-      curl: o.curl, url: o.url,
-      record: isChrome, // Chrome always records the debug-replay video (uploads to S3 if S3_ENDPOINT is set)
-      args: { target, ...(launch ? { launch: true } : { port }), bp: o.bp, ...(o.curl ? { curl: o.curl } : {}), ...(o.url ? { url: o.url } : {}) },
+      steps, curl: o.curl,
+      recordOut: o.out,
+      args: { target, ...(launch ? { launch: true } : { port }), bp: o.bp, ...(steps.length ? { steps: steps.map(safeStep) } : {}), ...(o.curl ? { curl: o.curl } : {}) },
     });
 
     emit(trace, () => this.#dynamic.render(trace), o);
     const collector = process.env.TRACE_COLLECTOR_URL;
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
-  }
-
-  async #runJourney(o: any): Promise<void> {
-    if (!o.step.length) usage("journey needs at least one --step (e.g. --step goto:http://… --step click:text=Impersonate)");
-    const steps = (o.step as string[]).map((s) => JourneyCommand.parseStep(s));
-
-    const input = new JourneyInput({ port: o.chrome, steps, out: o.out });
-    const badInput = input.validate();
-    if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
-
-    const cmd = new JourneyCommand();
-    const result = await cmd.run({ port: o.chrome, steps, out: o.out });
-    const problems = result.validate();
-    if (problems.length) log.error("journey produced an invalid result", { problems });
-    if (o.json) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-    else process.stdout.write(cmd.render(result) + "\n");
-    process.exit(result.ok && problems.length === 0 ? 0 : 1);
   }
 
   async #runGraph(o: any): Promise<void> {
@@ -125,23 +114,17 @@ export class Cli {
       .showHelpAfterError("(add --help for usage)");
 
     program.command("dynamic")
-      .description("breakpoints + a trigger → a full execution trace (Node CDP · Chrome CDP)")
+      .description("breakpoints + a trigger → a full execution trace. Node (CDP): a --curl trigger. Chrome (CDP): a scripted UI journey (--url/--step) recorded as a screen + trace-panel replay — debug and video together.")
       .option("--node [port]", `Node --inspect target (default; port ${DEFAULT_NODE_PORT})`)
       .option("--chrome [port]", "Chrome target: a running browser's --remote-debugging-port, or omit the port to launch a throwaway headless Chrome")
       .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring", collect, [])
       .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
       .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")
-      .option("--url <url>", "trigger for chrome: page URL to navigate (breakpoints bind before the first run)")
+      .option("--url <url>", "chrome trigger shorthand: a page URL to navigate (equivalent to --step goto:<url>)")
+      .option("--step <s>", "chrome journey step, repeatable & ordered: goto:<url> · click:<sel> · type:<sel>=<text> · waitfor:<sel> · wait:<ms> · newtab · eval:<js>  (sel: CSS or text=…)", collect, [])
+      .option("--out <mp4>", "chrome: output path for the screen + trace-panel recording (default: a temp file)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((o) => this.#runDynamic(o));
-
-    program.command("journey")
-      .description("drive a scripted UI journey across tabs and record it as one motion screencast (Chrome via CDP)")
-      .requiredOption("--chrome <port>", "Chrome --remote-debugging-port target", int)
-      .option("--step <s>", "journey step, repeatable & ordered: goto:<url> · click:<sel> · type:<sel>=<text> · waitfor:<sel> · wait:<ms> · newtab · eval:<js>  (sel: CSS or text=…)", collect, [])
-      .option("--out <mp4>", "output video path (default: a temp file)")
-      .option("--json", "print the journey result as JSON instead of a human summary")
-      .action((o) => this.#runJourney(o));
 
     program.command("graph")
       .description("call graph rooted at an entry → the flow tree for a function/route, via LSP call hierarchy")

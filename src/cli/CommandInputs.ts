@@ -18,8 +18,8 @@ export class DynamicInput {
   @IsOptional() @IsBoolean() launch?: boolean;
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) breakpoints: string[];
   @IsArray() @IsString({ each: true }) exprs: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) steps?: string[]; // chrome: the ordered UI journey
   @IsOptional() @IsString() curl?: string;
-  @IsOptional() @IsString() url?: string;
 
   constructor(init: Partial<DynamicInput> = {}) {
     this.target = init.target ?? TargetKind.Node;
@@ -43,21 +43,6 @@ export class GraphInput {
 
   constructor(init: Partial<GraphInput> = {}) {
     this.file = init.file ?? "";
-    Object.assign(this, init);
-  }
-
-  validate(): string[] { return validateStrict(this); }
-}
-
-/** Input contract for `trace-cli journey`. `steps` are already-parsed Step objects (non-empty). */
-export class JourneyInput {
-  @IsInt() @Min(1) @Max(MAX_PORT) port: number;
-  @IsArray() @ArrayNotEmpty() steps: unknown[];
-  @IsOptional() @IsString() out?: string;
-
-  constructor(init: Partial<JourneyInput> = {}) {
-    this.port = init.port ?? 0;
-    this.steps = init.steps ?? [];
     Object.assign(this, init);
   }
 

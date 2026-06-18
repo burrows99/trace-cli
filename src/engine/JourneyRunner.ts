@@ -10,11 +10,12 @@ import { BpBinder } from "./BpBinder.js";
 import { EventCapturer, type CdpCtx } from "./EventCapturer.js";
 import { type ResolvedBp } from "./BreakpointResolver.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
+import { Breakpoint } from "../domain/Breakpoint.js";
 import { sleep } from "../shared/sleep.js";
 
 export interface Step { action: "goto" | "eval" | "click" | "type" | "wait" | "waitfor" | "newtab"; arg?: string; value?: string; }
 
-/** StepResult — the validated outcome of one journey step (nested under JourneyResult). */
+/** StepResult — the validated outcome of one journey step (a failure becomes a STEP_FAILED diagnostic on the Trace). */
 export class StepResult {
   @IsInt() seq: number;
   @IsString() step: string;
@@ -71,6 +72,31 @@ export class JourneyRunner {
   finalUrl?: string;
 
   constructor(port: number, cast: Screencaster, trace?: TraceConfig) { this.#port = port; this.#cast = cast; this.#trace = trace; }
+
+  /** Parse a `--step` string: `action`, `action:arg`, or `type:<selector>=<text>`. */
+  static parseStep(raw: string): Step {
+    const colon = raw.indexOf(":");
+    const action = (colon === -1 ? raw : raw.slice(0, colon)).trim() as Step["action"];
+    const rest = colon === -1 ? "" : raw.slice(colon + 1);
+    if (action === "type") {
+      const eq = rest.indexOf("=");
+      return { action, arg: eq === -1 ? rest : rest.slice(0, eq), value: eq === -1 ? "" : rest.slice(eq + 1) };
+    }
+    return rest ? { action, arg: rest } : { action };
+  }
+
+  /** Breakpoint-binding report merged across tabs — a bp counts as bound if it bound in any tab the journey drove. */
+  breakpoints(): Breakpoint[] {
+    const byKey = new Map<string, Breakpoint>();
+    for (const st of this.#traceStates.values()) {
+      for (const b of st.binder.report()) {
+        const k = `${b.file}:${b.line}`;
+        const prev = byKey.get(k);
+        if (!prev || (b.bound && !prev.bound)) byKey.set(k, b);
+      }
+    }
+    return [...byKey.values()];
+  }
 
   async #pages(): Promise<any[]> {
     return (await CdpDriver.listTargets(this.#port, TargetKind.Chrome)).filter((t) => t.type === "page" && t.webSocketDebuggerUrl);
