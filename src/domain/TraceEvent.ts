@@ -1,4 +1,4 @@
-import { IsInt, IsObject, IsOptional, IsString } from "class-validator";
+import { IsInt, IsObject, IsOptional, IsString, ValidateNested } from "class-validator";
 import { Type } from "class-transformer";
 import { Loc } from "./Loc.js";
 
@@ -15,7 +15,7 @@ export class TraceEvent {
   @IsOptional() @IsString() label?: string;
   @IsOptional() @IsString() source?: EventSource;
   @IsOptional() @IsString() sessionId?: string;
-  @IsOptional() @Type(() => Loc) loc?: Loc;
+  @IsOptional() @ValidateNested() @Type(() => Loc) loc?: Loc;
   @IsOptional() @IsObject() attrs?: Record<string, unknown>;
   @IsOptional() @IsString() traceId?: string;
   @IsOptional() @IsString() spanId?: string;

@@ -7,7 +7,6 @@ import { Trace, TraceMeta, TraceData, TraceEvent, Breakpoint, Diagnostic, Loc } 
 import { LineageAnalyzer } from "../dist/analysis/LineageAnalyzer.js";
 import { BreakpointResolver } from "../dist/engine/BreakpointResolver.js";
 import { SourceMaps } from "../dist/engine/SourceMaps.js";
-import { Recorder } from "../dist/engine/Recorder.js";
 
 test("Loc.parse handles file:line, file:line:col, <native>", () => {
   const a = Loc.parse("src/a.ts:42");
@@ -81,9 +80,4 @@ test("SourceMaps static helpers (pathOf, suffixMatch, urlRegexFor)", () => {
   assert.ok(SourceMaps.suffixMatch("file:///app/dist/dashboard/x.js", "dist/dashboard/x.js"));
   assert.ok(!SourceMaps.suffixMatch("src/a/x.ts", "src/b/x.ts"));
   assert.ok(new RegExp(SourceMaps.urlRegexFor("file:///app/x.js")).test("file:///app/x.js?v=1"));
-});
-
-test("Recorder.wrap + concatList", () => {
-  assert.deepEqual(Recorder.wrap("a b c d e", 3), ["a b", "c d", "e"]);
-  assert.match(Recorder.concatList(["/f0.png", "/f1.png"], 3, 2), /duration 2[\s\S]*duration 3[\s\S]*file '\/f1.png'/);
 });

@@ -6,6 +6,7 @@ import { SourceMaps } from "./SourceMaps.js";
 import { BreakpointResolver } from "./BreakpointResolver.js";
 import { BpBinder } from "./BpBinder.js";
 import { EventCapturer, type CdpCtx } from "./EventCapturer.js";
+import { Screencaster } from "./Screencaster.js";
 import { CurlTrigger, type CurlResult } from "./CurlTrigger.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
@@ -24,7 +25,10 @@ export interface CaptureResult {
   network?: NetworkLine[];
   finalUrl?: string;
   screenshot?: string;
-  finalShot?: string;
+  /** motion screencast frames captured during a Chrome `--record` run (left side of the replay video). */
+  frames?: { data: Buffer; t: number }[];
+  /** breakpoint hits stamped with wall-clock time, so the replay can lay the trace panel beside each frame. */
+  traced?: { ev: TraceEvent; t: number }[];
   fatal?: string;
 }
 
@@ -89,8 +93,10 @@ interface CapturePlan {
   removeInstr(driver: CdpDriver): Promise<void>;
   /** await any outstanding trigger work (Node: the curl promise). */
   drain(): Promise<void>;
-  /** post-capture work (Chrome: final url + screenshot/record snapshot). */
+  /** post-capture work (Chrome: final url + screenshot, stop screencast). */
   finish(driver: CdpDriver): Promise<void>;
+  /** notified of each captured breakpoint event (Chrome --record: stamps it with wall-clock time). */
+  onCapture?(ev: TraceEvent): void;
 }
 
 const hostOf = (u: string) => { try { return new URL(u).host; } catch { return u; } };
@@ -155,7 +161,9 @@ export class Tracer {
           await driver.send(Cdp.Debugger.resume).catch(() => {});
           continue;
         }
-        result.events.push(await capturer.capture(paused, "breakpoint", ctx));
+        const ev = await capturer.capture(paused, "breakpoint", ctx);
+        result.events.push(ev);
+        plan.onCapture?.(ev);
         await capturer.runSteps(ctx, plan.stepTimeoutMs);
         await driver.send(Cdp.Debugger.resume).catch(() => {});
         if (plan.shouldStop(driver)) break;
@@ -211,12 +219,17 @@ export class Tracer {
     const { port = DEFAULT_CHROME_PORT, url, urlMatch, timeoutMs = 15000, shot, record = false } = opts;
     if (!url) throw new Error("traceChrome requires a page url");
     const result: CaptureResult = { target: TargetKind.Chrome, trigger: url, breakpoints: [], events: [], console: [], network: [] };
+    // record → run a motion screencast over the page and stamp each hit with wall-clock time, so the replay
+    // can lay the trace panel beside the live screen (same renderer as `journey`), not a static screenshot.
+    const cast = record ? new Screencaster() : null;
+    const traced: { ev: TraceEvent; t: number }[] = [];
     let loaded = false;
     let instrId: string | null = null;
     const plan: CapturePlan = {
       result,
       resolveWs: () => CdpDriver.resolveWsUrl(port, { kind: TargetKind.Chrome, urlMatch: urlMatch || hostOf(url) }),
-      enableExtra: async (driver) => { await driver.send(Cdp.Page.enable); await driver.send(Cdp.Network.enable); },
+      enableExtra: async (driver) => { await driver.send(Cdp.Page.enable); await driver.send(Cdp.Network.enable); if (cast) await cast.switch(driver); },
+      onCapture: (ev) => { if (cast) traced.push({ ev, t: Date.now() }); },
       attach: (driver) => {
         driver.on(Cdp.Runtime.consoleAPICalled, (p: any) => { if (["error", "warning"].includes(p.type)) result.console!.push({ type: p.type, text: (p.args || []).map((a: any) => a.value ?? a.description ?? a.type).join(" ").slice(0, 300) }); });
         driver.on(Cdp.Runtime.exceptionThrown, (p: any) => result.console!.push({ type: "exception", text: String(p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || "").split("\n")[0].slice(0, 300) }));
@@ -237,10 +250,11 @@ export class Tracer {
         await driver.send(Cdp.Debugger.resume).catch(() => {});
         await sleep(1500);
         try { const u = await driver.send(Cdp.Runtime.evaluate, { expression: "location.href", returnByValue: true }); result.finalUrl = u.result?.value; } catch { /* ignore */ }
-        if (shot || record) {
+        if (shot) {
           const data = await this.#snap(driver);
-          if (data) { if (record) result.finalShot = data; if (shot) { (await import("node:fs")).writeFileSync(shot, Buffer.from(data, "base64")); result.screenshot = shot; } }
+          if (data) { (await import("node:fs")).writeFileSync(shot, Buffer.from(data, "base64")); result.screenshot = shot; }
         }
+        if (cast) { await cast.stop().catch(() => {}); result.frames = cast.frames(); result.traced = traced; }
       },
     };
     return this.#capture(opts, plan);

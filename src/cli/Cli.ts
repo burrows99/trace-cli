@@ -14,6 +14,7 @@ import { Collector } from "../collector/Collector.js";
 import { S3ArtifactStore } from "../storage/S3ArtifactStore.js";
 import { VERSION } from "../shared/version.js";
 import { TargetKind } from "../domain/Target.js";
+import { Diagnostic } from "../domain/Diagnostic.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT, DEFAULT_VIEWPORT } from "../shared/defaults.js";
 import type { Trace } from "../domain/Trace.js";
 
@@ -28,6 +29,10 @@ function pickTarget(o: any): { target: DynamicTargetKind; port: number } {
 
 /** emit policy: bare --json → JSON to stdout; --json <path> → file (stdout stays human); else human. */
 function emit(trace: Trace, humanFn: () => string, o: any): void {
+  // Enforce the envelope contract before it leaves the process: structural violations become error
+  // diagnostics (and flip `ok`/exit code) instead of shipping a silently-malformed Trace.
+  for (const problem of trace.validate()) trace.diagnostics.push(Diagnostic.error("E_SCHEMA", problem));
+  trace.ok = !trace.hasErrors();
   const json = trace.toJSON();
   const toFile = typeof o.json === "string";
   if (toFile) writeFileSync(o.json, JSON.stringify(json, null, 2));

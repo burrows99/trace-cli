@@ -1,4 +1,4 @@
-import { IsArray, IsInt, IsOptional, IsString } from "class-validator";
+import { Allow, IsArray, IsInt, IsOptional, IsString, ValidateNested } from "class-validator";
 import { Type } from "class-transformer";
 import { Loc } from "./Loc.js";
 
@@ -8,8 +8,8 @@ export type LineageKind = "expr" | "local";
 export class LineagePoint {
   @IsInt() seq: number;
   @IsOptional() t?: number | string;
-  @IsOptional() @Type(() => Loc) loc?: Loc;
-  value: unknown;
+  @IsOptional() @ValidateNested() @Type(() => Loc) loc?: Loc;
+  @Allow() value: unknown;
   @IsOptional() changed?: boolean;
 
   constructor(init: Partial<LineagePoint> = {}) {
@@ -24,7 +24,7 @@ export class Lineage {
   @IsString() kind: LineageKind;
   @IsInt() occurrences: number;
   @IsInt() changes: number;
-  @IsArray() @Type(() => LineagePoint) series: LineagePoint[];
+  @IsArray() @ValidateNested({ each: true }) @Type(() => LineagePoint) series: LineagePoint[];
 
   constructor(init: Partial<Lineage> = {}) {
     this.name = init.name ?? "";

@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { CdpDriver } from "../transport/CdpDriver.js";
 import { Cdp } from "../transport/cdp.js";
 import { ffmpeg, concatInput, h264Mp4, FRAMES_LIST_FILE } from "./ffmpeg.js";
-import type { CaptureResult } from "./Tracer.js";
 import type { TraceEvent } from "../domain/TraceEvent.js";
 import { sleep } from "../shared/sleep.js";
 
@@ -40,54 +39,15 @@ html,body{width:${OW}px;height:${OH}px;background:#0b1220;color:#e6edf3;font:14p
 .h{color:#7ee787;font-weight:700;margin-bottom:6px}
 pre{white-space:pre-wrap;word-break:break-all;color:#9de0ad;font-size:12px}`;
 
-/** Recorder — renders a CaptureResult into a side-by-side debug-replay mp4 (Chrome frame render + ffmpeg). */
+/**
+ * Recorder — composes a side-by-side replay mp4: the live screen on the left, and beside each moment the
+ * active breakpoint's stack/locals/watch on the right. Frames are rendered as HTML in a headless Chrome,
+ * then stitched with ffmpeg. Drives both `dynamic --record` and `journey` via `renderJourney`.
+ */
 export class Recorder {
-  /** word-wrap a line (kept for tests / non-HTML callers). */
-  static wrap(line: string, width: number): string[] {
-    const out: string[] = [];
-    let s = String(line);
-    while (s.length > width) { let cut = s.lastIndexOf(" ", width); if (cut <= 0) cut = width; out.push(s.slice(0, cut)); s = s.slice(cut).replace(/^ /, ""); }
-    out.push(s);
-    return out;
-  }
-
-  /** the ffmpeg concat-demuxer list (frame 0 uses titleSecs when truthy; last frame repeated to flush). */
-  static concatList(frames: string[], stepSecs: number, titleSecs: number): string {
-    const lines: string[] = [];
-    frames.forEach((f, idx) => lines.push(`file '${f}'`, `duration ${idx === 0 && titleSecs ? titleSecs : stepSecs}`));
-    if (frames.length) lines.push(`file '${frames[frames.length - 1]}'`);
-    return lines.join("\n") + "\n";
-  }
-
   static #caption(e: TraceEvent): string {
     const a = attrsOf(e);
     return `#${e.seq}  ${a.cls ? a.cls + "." : ""}${e.label}  ${locStr(e)}${String(e.kind).startsWith("step") ? "  [" + e.kind + "]" : ""}`;
-  }
-
-  static #frameHtml(result: CaptureResult, e: TraceEvent): string {
-    const a = attrsOf(e);
-    const left = result.finalShot
-      ? `<img class=app src="data:image/png;base64,${result.finalShot}">`
-      : `<div class=req><div class=h>(no app screenshot)</div></div>`;
-    const stack = (a.stack || []).map((f) => `<div class=fr>${esc(f)}</div>`).join("");
-    const locals = Object.entries(a.locals || {}).map(([k, v]) => `<div class=kv><span class=k>${esc(k)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
-    const exprs = Object.entries(a.exprs || {}).map(([ex, v]) => `<div class="kv expr">⊢ <span class=k>${esc(ex)}</span> = <span class=v>${esc(oneLine(v))}</span></div>`).join("");
-    return `<!doctype html><meta charset=utf8><style>${STYLE}</style><div class=root>
-      <div class=row><div class=left>${left}</div><div class=panel>
-        <div class=hdr>#${e.seq} &nbsp; +${e.t}ms</div>
-        <div class=loc>${esc((a.cls ? a.cls + "." : "") + e.label)} &nbsp;@ ${esc(locStr(e))}</div>
-        <div class=sec>stack</div>${stack}
-        ${locals ? `<div class=sec>locals</div>${locals}` : ""}
-        ${exprs ? `<div class=sec>watch</div>${exprs}` : ""}
-      </div></div>
-      <div class=cap>${esc(Recorder.#caption(e))}</div>
-    </div>`;
-  }
-
-  static #titleHtml(title: string): string {
-    return `<!doctype html><meta charset=utf8><style>${STYLE}
-.title{display:flex;align-items:center;justify-content:center;height:100%;font:600 34px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;text-align:center;padding:0 60px}</style>
-<div class=title>${esc(title)}</div>`;
   }
 
   static async #launchRenderChrome(): Promise<{ port: number; kill(): void }> {
@@ -105,34 +65,6 @@ export class Recorder {
     await sleep(280);
     const s = await driver.send(Cdp.Page.captureScreenshot, { format: "png" });
     writeFileSync(out, Buffer.from(s.data, "base64"));
-  }
-
-  static async render(result: CaptureResult, opts: { out: string; stepSecs?: number; title?: string; titleSecs?: number }): Promise<string | null> {
-    const { out, stepSecs = 3, title, titleSecs = 2.5 } = opts;
-    if (!result.events?.length) return null;
-    const dir = mkdtempSync(join(tmpdir(), "trace-rec-"));
-    const chrome = await Recorder.#launchRenderChrome();
-    let driver: CdpDriver | undefined;
-    try {
-      const targets = await (await fetch(`http://localhost:${chrome.port}/json`)).json() as any[];
-      const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl) || targets[0];
-      if (!page?.webSocketDebuggerUrl) throw new Error("render Chrome exposed no page target");
-      driver = await CdpDriver.connect(page.webSocketDebuggerUrl);
-      await driver.send(Cdp.Page.enable);
-      await driver.send(Cdp.Emulation.setDeviceMetricsOverride, { width: OW, height: OH, deviceScaleFactor: 1, mobile: false });
-      const frames: string[] = [];
-      if (title) { const f = join(dir, "frame_0.png"); await Recorder.#renderFrame(driver, Recorder.#titleHtml(title), f); frames.push(f); }
-      let i = 1;
-      for (const e of result.events) { const f = join(dir, `frame_${i}.png`); await Recorder.#renderFrame(driver, Recorder.#frameHtml(result, e), f); frames.push(f); i++; }
-      const listFile = join(dir, FRAMES_LIST_FILE);
-      writeFileSync(listFile, Recorder.concatList(frames, stepSecs, title ? titleSecs : 0));
-      await ffmpeg([...concatInput(listFile), ...h264Mp4({ pixFmt: "yuv420p" }), out]);
-      return out;
-    } finally {
-      try { driver?.close(); } catch { /* ignore */ }
-      chrome.kill();
-      rmSync(dir, { recursive: true, force: true });
-    }
   }
 
   /** One journey frame: the live screencast image on the left, the active breakpoint's panel on the right. */

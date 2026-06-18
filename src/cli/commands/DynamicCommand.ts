@@ -84,8 +84,8 @@ export class DynamicCommand {
   async #record(capture: CaptureResult, trace: Trace, sessionId: string, out?: string): Promise<void> {
     try {
       const path = out ?? join(tmpdir(), `trace-${sessionId}.mp4`);
-      const mp4 = await Recorder.render(capture, { out: path });
-      if (!mp4) { process.stderr.write("[trace] no hits — nothing to record\n"); return; }
+      const mp4 = await Recorder.renderJourney(capture.frames ?? [], capture.traced ?? [], path);
+      if (!mp4) { process.stderr.write("[trace] no frames captured — nothing to record\n"); return; }
       const up = this.artifacts && this.artifacts.isConfigured() ? await this.artifacts.upload(mp4, `recordings/${sessionId}.mp4`, "video/mp4") : null;
       trace.data.recording = up ? new Recording({ url: up.url, bytes: up.bytes }) : new Recording({ path: mp4 });
       process.stderr.write(up ? `[trace] recording → ${up.url}\n` : `[trace] recording → ${mp4} (set S3_ENDPOINT to upload + get a link)\n`);

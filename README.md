@@ -42,6 +42,7 @@ Shared flags: `--bp <file:line | file@substring>` (repeatable) · `--expr '<js>'
 every hit) · `--frames N` · `--max-hits N` · `--root <dir>` · `--json [path]` (envelope to a file, or bare
 `--json` for JSON on stdout) · `--emit <url>` (POST to a collector) · `--attach-timeout-ms <n>` (fail fast if
 the debugger connect stalls). Chrome adds `--shot <png>`; it also **records a debug-replay video by default**
+— a motion screencast of the page with the live trace panel (stack/locals/watch) beside each moment
 (`--no-record` to skip) — uploaded to S3 if `S3_ENDPOINT` is set, with the link attached to the trace
 (`data.recording.url`), else kept as a local path. `stdout` is the trace, `stderr` is `[trace]` logs; exit
 `0` ok · `1` runtime · `2` usage.

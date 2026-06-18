@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { instanceToPlain, plainToInstance, Type } from "class-transformer";
-import { IsArray, IsBoolean, IsObject, IsOptional, IsString, ValidateNested, validateSync } from "class-validator";
+import { Equals, IsArray, IsBoolean, IsObject, IsOptional, IsString, ValidateNested, validateSync, type ValidationError } from "class-validator";
 
 import { Breakpoint } from "./Breakpoint.js";
 import { TraceEvent } from "./TraceEvent.js";
@@ -37,11 +37,11 @@ export interface NetworkLine { status: number; url: string; }
 
 /** TraceData — the command-specific payload, composed from domain entities. */
 export class TraceData {
-  @IsOptional() @IsArray() @Type(() => Breakpoint) breakpoints?: Breakpoint[];
-  @IsOptional() @IsArray() @Type(() => TraceEvent) events?: TraceEvent[];
-  @IsOptional() @IsArray() @Type(() => Lineage) lineage?: Lineage[];
-  @IsOptional() @Type(() => Recording) recording?: Recording;
-  @IsOptional() @Type(() => CurlResponse) response?: CurlResponse;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => Breakpoint) breakpoints?: Breakpoint[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => TraceEvent) events?: TraceEvent[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => Lineage) lineage?: Lineage[];
+  @IsOptional() @ValidateNested() @Type(() => Recording) recording?: Recording;
+  @IsOptional() @ValidateNested() @Type(() => CurlResponse) response?: CurlResponse;
   @IsOptional() console?: ConsoleLine[];
   @IsOptional() network?: NetworkLine[];
   @IsOptional() @IsString() finalUrl?: string;
@@ -58,7 +58,7 @@ export class TraceData {
  * serialization of a run — nothing else.
  */
 export class Trace {
-  readonly tool = "trace" as const;
+  @Equals("trace") readonly tool = "trace" as const;
   @IsString() version: string;
   @IsString() command: string;
   @IsBoolean() ok: boolean;
@@ -86,11 +86,19 @@ export class Trace {
     return instanceToPlain(this, { exposeUnsetFields: false });
   }
 
-  /** Structural validation via class-validator. Returns [] when valid. */
+  /**
+   * Structural validation via class-validator. Returns [] when valid. Strict: `whitelist` +
+   * `forbidNonWhitelisted` reject any property the domain doesn't declare; the recursion walks `children`
+   * so failures inside nested entities (events[], lineage[].series[], data.recording, …) surface with a path.
+   */
   validate(): string[] {
-    return validateSync(this).flatMap((e) =>
-      Object.values(e.constraints ?? {}).map((m) => `${e.property}: ${m}`),
-    );
+    const flatten = (errs: ValidationError[], path = ""): string[] =>
+      errs.flatMap((e) => {
+        const at = path ? `${path}.${e.property}` : e.property;
+        const here = Object.values(e.constraints ?? {}).map((m) => `${at}: ${m}`);
+        return e.children?.length ? here.concat(flatten(e.children, at)) : here;
+      });
+    return flatten(validateSync(this, { whitelist: true, forbidNonWhitelisted: true }));
   }
 
   /** Hydrate a stored/received plain envelope back into a rich Trace (used by the collector). */
