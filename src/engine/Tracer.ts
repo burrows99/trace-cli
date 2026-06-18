@@ -48,9 +48,6 @@ export interface TraceOptions {
   attachTimeoutMs?: number;
   reqTimeoutMs?: number;
   curl?: string;
-  url?: string;
-  shot?: string;
-  record?: boolean;
   urlMatch?: string;
   titleMatch?: string;
   sessionId?: string;
@@ -103,6 +100,8 @@ export class Tracer {
     const capturer = new LogpointCapturer(driver, sm, t0, frames);
     const pending: string[] = [];
     driver.on(Cdp.Runtime.bindingCalled, (e: any) => { if (e?.name === BINDING_NAME) pending.push(e.payload); });
+    // Logpoints never pause; this safety resume keeps a stray `debugger;` in the traced app from hanging the run.
+    driver.on(Cdp.Debugger.paused, () => { void driver.send(Cdp.Debugger.resume).catch(() => {}); });
 
     try {
       await driver.send(Cdp.Runtime.enable);
@@ -163,6 +162,7 @@ export class Tracer {
     let stepResults: StepResult[] = [];
     let fatal: string | undefined;
     try {
+      // A leading `goto` navigates a fresh tab, so instrument it to bind before first-run/on-mount code runs.
       await runner.start(urlMatch, parsed[0]?.action === "goto");
       stepResults = await runner.run(parsed);
     } catch (e: any) {

@@ -22,7 +22,6 @@ export type DynamicTargetKind = TargetKind;
 export interface DynamicRequest extends TraceOptions {
   target: DynamicTargetKind;
   launch?: boolean;            // chrome: spawn a throwaway headless Chrome instead of attaching to `port`
-  record?: boolean;            // chrome: render + upload a debug-replay video (on by default)
   recordOut?: string;          // explicit output path (else a temp file)
   /**
    * Live progress sink: called with a partial Trace as soon as the run starts (0 events) and again on every
