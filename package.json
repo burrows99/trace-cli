@@ -1,7 +1,7 @@
 {
   "name": "trace-cli",
   "version": "0.3.0",
-  "description": "Unified execution tracer & analyzer. One JSON envelope across breakpoint traces (Node/Chrome via CDP) and static analysis. A thin orchestration shell over battle-tested debug protocols. Usable by any agent, human, or script.",
+  "description": "Execution tracer & analyzer — one JSON envelope across breakpoint traces (Node/Chrome CDP) and static analysis.",
   "type": "module",
   "bin": {
     "trace-cli": "bin/trace"

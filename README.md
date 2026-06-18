@@ -3,7 +3,9 @@
 ![license MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![node >=18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)
 
-**A unified execution tracer & analyzer.** Point it at a running program, give it breakpoints + a trigger → a full **execution trace** (every hit in order: call stack, locals, watched expressions, timing) as **one JSON envelope**, identical shape across targets.
+Execution tracer & analyzer — one JSON envelope across breakpoint traces (Node/Chrome CDP) and static analysis.
+
+Point it at a running program, give it breakpoints + a trigger → a full **execution trace** (every hit in order: call stack, locals, watched expressions, timing) as **one JSON envelope**, identical shape across targets.
 
 - Not "a debugger" — **OpenTelemetry for software execution**: every source (debug protocol, span exporter, shell) normalizes to one `Event`; events are the asset. See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
@@ -18,7 +20,18 @@ trace-cli schema    ← the output JSON Schema (the contract)
 - **Not coupled to any project** — ports, triggers, breakpoint files all come from flags. Runs on plain Node (≥ 18).
 - Transport delegated to **CDP via `chrome-remote-interface`** — the project owns target discovery + the event model, not the wire protocol.
 
-**Contents:** [Install](#install) · [Trace Node & browser](#trace-node--the-browser) · [Serve + Docker](#show-all-traces-live--trace-cli-serve--docker) · [Code graph](#code-graph--the-flow-tree-trace-cli-static-graph) · [The envelope](#the-contract-one-envelope) · [Library](#as-a-library-class-first-typescript) · [Plugin](#as-a-claude-code-plugin) · [Contributing](#contributing) · [Roadmap](#roadmap) · [License](#license)
+## Table of Contents
+
+- [Install](#install)
+- [Usage](#usage)
+- [Realtime UI and Docker](#realtime-ui-and-docker)
+- [Static analysis](#static-analysis)
+- [The trace envelope](#the-trace-envelope)
+- [Claude Code plugin](#claude-code-plugin)
+- [Try it](#try-it)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Install
 
@@ -28,10 +41,13 @@ trace-cli schema    ← the output JSON Schema (the contract)
   claude plugin install trace@trace-oss
   ```
 - **As a CLI / library (npm)** — `npm i -g trace-cli` for the global `trace-cli` command, or `npm i trace-cli` to import the classes. Requires **Node ≥ 18**.
+- Check backing tools (chrome, ffmpeg, language servers, …) with `trace-cli doctor`.
 
-## Trace Node & the browser
+## Usage
 
-One engine, one protocol driver — **CDP** for the JS family (Node `--inspect` and Chrome):
+One engine, one protocol driver — **CDP** for the JS family (Node `--inspect` and Chrome).
+
+### CLI
 
 ```bash
 # Node (CDP): attach to a --inspect port, fire a curl, trace the request
@@ -52,14 +68,34 @@ trace-cli dynamic --chrome --url http://localhost:5173/route --bp src/pages/Thin
 - **Flags (both targets):** `--bp <file:line | file@substring>` (repeatable) · `--expr '<js>'` (repeatable, evaluated per hit) · `--json [path]` (to a file, or bare `--json` → stdout).
 - **Trigger:** Node → `--curl`; Chrome → `--url` (one navigation) and/or `--step` — an ordered UI journey (`goto`/`click`/`type`/`waitfor`/`wait`/`newtab`/`eval`, validated against a fixed vocabulary); `--out <mp4>` sets the recording path.
 - **Chrome requires ≥1 `--bp`** — debug + video are produced together. `--chrome <port>` attaches to a browser you launched (a real, logged-in session); bare `--chrome` launches a throwaway headless Chrome.
-- **Chrome always records** a debug-replay video (motion screencast of the page + the live trace panel: stack/locals/watch) → uploaded to S3 if `S3_ENDPOINT` is set (`data.recording.url`), else kept as a local path.
+- **Chrome always records** a debug-replay video (motion screencast + the live trace panel: stack/locals/watch) → uploaded to S3 if `S3_ENDPOINT` is set (`data.recording.url`), else kept as a local path.
 - **I/O & exit:** `stdout` = the trace; `stderr` = structured logs (`TRACE_LOG_LEVEL=debug|info|warn|error|silent`, `TRACE_LOG_FORMAT=json|pretty`); exit `0` ok · `1` runtime · `2` usage.
-- Inputs **and** the emitted envelope are validated (class-validator) before anything runs or ships. Other knobs (hit cap, stack depth, source root, attach timeout) use sane defaults — kept off the flag surface on purpose.
-- One `ProtocolDriver` interface → more debug protocols (DAP: Python/Go/Java/C/C++/Rust) are a new driver behind the same envelope — see the [roadmap](#roadmap).
+- Inputs **and** the emitted envelope are validated (class-validator) before anything runs or ships. Other knobs (hit cap, stack depth, source root, attach timeout) use sane defaults — kept off the flag surface.
+- One `ProtocolDriver` interface → more debug protocols (DAP: Python/Go/Java/C/C++/Rust) are a new driver behind the same envelope — see the [Roadmap](#roadmap).
 
-See installed tooling with `trace-cli doctor`.
+### Library
 
-## Show all traces live — `trace-cli serve` + Docker
+Class-first / domain-driven TypeScript (`domain/` entities, `transport/` drivers, `engine/`, `analysis/`, `storage/`, `collector/`, `cli/`). `npm run build`, then:
+
+```ts
+import { DynamicCommand, Trace } from "trace-cli";
+
+const { trace } = await new DynamicCommand().run({
+  target: "node",
+  port: 9229,
+  curl: 'curl -s http://127.0.0.1:3100/price?qty=3',
+  breakpoints: ["test/servers/node-api/server.js:42"],
+  root: "/path/to/project",
+});
+
+const envelope = trace.toJSON();          // domain Trace → wire JSON
+const errors = trace.validate();          // class-validator (class-first contract)
+const restored = Trace.fromPlain(envelope); // rehydrate a stored envelope into entities
+```
+
+- Also exported: `Tracer`, `CdpDriver` (`ProtocolDriver`), `LineageAnalyzer`, `S3ArtifactStore` (`ArtifactStore`), `Collector`/`PostgresSessionStore` (`SessionStore`).
+
+## Realtime UI and Docker
 
 - `trace-cli serve` = **collector + realtime web UI** (Langfuse-style): a live session list over SSE + a per-trace timeline (stack, locals, watched expressions, response).
 - Point any trace at it with `TRACE_COLLECTOR_URL` → every run POSTs its envelope.
@@ -89,10 +125,11 @@ trace-cli serve --port 4000        # collector + API (data source)
 npm run dev:ui                 # Next.js dev → http://localhost:3000 (reads :4000 via ui/.env.development)
 ```
 
-## Code graph — the flow tree (`trace-cli static graph`)
+## Static analysis
 
-- Static call graph **without running anything** — the outgoing-call tree ("what calls what") for a function or route.
-- Drives a **language server over LSP** (`prepareCallHierarchy` + `callHierarchy/outgoingCalls`) — the engine an IDE's *Show Call Hierarchy* uses → type-accurate (follows DI-injected services, interface→impl, cross-file imports), not a regex guess.
+Code structure **without running anything** — the same envelope, no live target.
+
+- `trace-cli static graph` — call graph / flow tree ("what calls what") for a function or route, via a **language server over LSP** (`prepareCallHierarchy` + `callHierarchy/outgoingCalls`) — the IDE *Show Call Hierarchy* engine, so it's type-accurate (DI-injected services, interface→impl, cross-file imports), not a regex guess.
 
 ```bash
 # the common case — just the entry; root + language server are auto-detected
@@ -100,9 +137,8 @@ trace-cli static graph --entry src/auth/auth.service.ts:42:9
 trace-cli static graph --entry src/auth/auth.service.ts@exchangeToken     # …or by symbol
 ```
 
-- **Only required input:** the entry (`file:line`, `file:line:col`, or `file@symbol`).
-- **Root** auto-found (nearest `tsconfig.json`/`package.json`/`.git`); **LSP server** chosen by file extension (TS/JS bundled). `--depth <n>` bounds it; `--server <cmd>` / `--root <dir>` override the auto-detection.
-- **Payload:** normalized `{ nodes, edges }` (the schema's `Graph` shape) under `data.graph`; the human render is a flow tree marking shared callees (`→ shared`), recursion (`↻ cycle`), and external/dependency code (`⊗ external`).
+- **Only required input:** the entry (`file:line`, `file:line:col`, or `file@symbol`). **Root** auto-found (nearest `tsconfig.json`/`package.json`/`.git`); **LSP server** chosen by file extension (TS/JS bundled). `--depth <n>` bounds it; `--server <cmd>` / `--root <dir>` override.
+- **Payload:** normalized `{ nodes, edges }` (the schema's `Graph` shape) under `data.graph`; the human render is a flow tree marking shared callees (`→ shared`), recursion (`↻ cycle`), external code (`⊗ external`).
 
 **Any language with a call-hierarchy LSP server** — point `--server` at it:
 
@@ -115,9 +151,9 @@ trace-cli static graph --entry src/auth/auth.service.ts@exchangeToken     # …o
 | C / C++ | `clangd` | needs `compile_commands.json` |
 | Java | `jdtls` | install + a custom launch command |
 
-- **Caveats** (about the server/project, not the tool): the server must be installed + advertise `callHierarchyProvider` (the CLI errors clearly if not); the project must be resolvable (e.g. clangd needs `compile_commands.json`); it's a *call* graph — JSX `<Component/>` composition isn't a call, and calls nested in callbacks attribute to the callback.
+- **Caveats** (server/project, not the tool): the server must be installed + advertise `callHierarchyProvider` (the CLI errors clearly if not); the project must be resolvable (e.g. clangd needs `compile_commands.json`); it's a *call* graph — JSX `<Component/>` composition isn't a call, and calls nested in callbacks attribute to the callback.
 
-**Sibling static analyses** share the same envelope, each shelling out to its analyzer (and degrading to a clear error diagnostic when the tool isn't installed — `trace-cli doctor` shows what's present):
+**Sibling analyses** share the same envelope, each shelling out to its analyzer (degrading to a clear error diagnostic when the tool isn't installed — `trace-cli doctor` shows what's present):
 
 ```bash
 trace-cli static deps --entry src/index.ts   # module-import graph + circular-dependency groups   (madge)
@@ -125,7 +161,7 @@ trace-cli static complexity src              # per-function cyclomatic complexit
 trace-cli static symbols src/app.ts          # a file's definition outline (functions/classes/…)   (tree-sitter)
 ```
 
-## The contract: one envelope
+## The trace envelope
 
 - Every subcommand emits the same envelope; only `data` varies, built from shared shapes (`Loc`/`Symbol`/`Metric`/`Graph`/`Event`).
 - `Event` is the unifier — a CDP breakpoint hit, a span, and a UI action all become `Event`s on one timeline, each tagged with `source` (`cdp`/`terminal`/`otel`) + a `sessionId` for cross-source correlation.
@@ -153,29 +189,7 @@ trace-cli static symbols src/app.ts          # a file's definition outline (func
 - **Mutation lineage** (`data.lineage`): a *derived* per-watched-value series of how it changed as flow continued (`total: 0 → 9.99 → 14.49`) — value-over-time, not per-hit snapshots; surfaces in the human render, the JSON envelope, and the live UI (empty when nothing mutates).
 - Print the full JSON Schema with `trace-cli schema` — [`src/shared/trace.schema.json`](src/shared/trace.schema.json).
 
-## As a library (class-first, TypeScript)
-
-- TypeScript, class-first / domain-driven layout (`domain/` entities, `transport/` drivers, `engine/`, `analysis/`, `storage/`, `collector/`, `cli/`). `npm run build`, then:
-
-```ts
-import { DynamicCommand, Trace } from "trace-cli";
-
-const { trace } = await new DynamicCommand().run({
-  target: "node",
-  port: 9229,
-  curl: 'curl -s http://127.0.0.1:3100/price?qty=3',
-  breakpoints: ["test/servers/node-api/server.js:42"],
-  root: "/path/to/project",
-});
-
-const envelope = trace.toJSON();          // domain Trace → wire JSON
-const errors = trace.validate();          // class-validator (class-first contract)
-const restored = Trace.fromPlain(envelope); // rehydrate a stored envelope into entities
-```
-
-- Also exported: `Tracer`, `CdpDriver` (`ProtocolDriver`), `LineageAnalyzer`, `S3ArtifactStore` (`ArtifactStore`), `Collector`/`PostgresSessionStore` (`SessionStore`).
-
-## As a Claude Code plugin
+## Claude Code plugin
 
 This repo is also a [Claude Code plugin](https://code.claude.com/docs/en/plugins) — installing it bundles a usage skill + the `bin/` binary:
 
@@ -210,6 +224,12 @@ trace-cli dynamic --chrome --url http://localhost:5180 \
 - **Next** (same envelope): **DAP languages** (Python, Go, Java, C/C++) for *dynamic* tracing via a second `ProtocolDriver` · `trace-cli exec` (OTel spans) · `trace-cli web` (Playwright) · `trace-cli correlate` (the cross-tier `traceparent` handshake).
 - See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
+## Contributing
+
+- **Questions / bugs:** open an issue on the repository. **PRs:** welcome.
+- **Before a PR:** branch from `master`, keep the **class-first / domain-driven** layout, and run `npm test` (it builds first) — it must pass.
+- **Extending:** a new tracing target implements the `ProtocolDriver` interface behind the same envelope (see [`docs/MIGRATION.md`](docs/MIGRATION.md)); a new static analyzer is a `TraceCommand` under `src/cli/commands/` that emits the shared envelope.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT © 2026 Raunak Burrows — see [LICENSE](LICENSE).
