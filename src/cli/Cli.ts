@@ -67,7 +67,7 @@ export class Cli {
 
   build(): Command {
     const program = new Command()
-      .name("trace")
+      .name("trace-cli")
       .description("Unified, class-first execution tracer & analyzer — one Trace envelope across breakpoints + analysis.")
       .version(VERSION)
       .showHelpAfterError("(add --help for usage)");
@@ -79,7 +79,7 @@ export class Cli {
       .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring", collect, [])
       .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
       .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")
-      .option("--url <url>", "trigger for chrome: page URL to navigate + reload")
+      .option("--url <url>", "trigger for chrome: page URL to navigate (breakpoints bind before the first run)")
       .option("--root <dir>", "root for resolving relative --bp files (default cwd)")
       .option("--max-hits <n>", "stop after N hits", int, 25)
       .option("--frames <n>", "stack frames captured per hit", int, 6)
@@ -87,7 +87,7 @@ export class Cli {
       .option("--timeout-ms <n>", "per-pause wait timeout", int)
       .option("--attach-timeout-ms <n>", "fail fast if the debugger attach/connect stalls (default 8000)", int)
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .option("--emit <url>", "POST the envelope to a collector (env TRACE_COLLECTOR_URL); see `trace serve`")
+      .option("--emit <url>", "POST the envelope to a collector (env TRACE_COLLECTOR_URL); see `trace-cli serve`")
       .option("--shot <png>", "chrome: write a screenshot to this path")
       .option("--record [path]", "chrome: record a debug-replay video (ON by default; uploads to S3 if S3_ENDPOINT set)")
       .option("--no-record", "chrome: skip the default video recording")

@@ -9,10 +9,10 @@ protocol, a span exporter, a shell) normalizes to one `Event`, and events are th
 one signal source. See [`docs/MIGRATION.md`](docs/MIGRATION.md) for the architecture and north star.
 
 ```
-trace dynamic   ← breakpoints + a trigger → a full trace   (Node·Chrome via CDP)
-trace serve     ← collector + realtime UI: show ALL traces live (Langfuse-style)
-trace doctor    ← which backing tools are installed
-trace schema    ← the output JSON Schema (the contract)
+trace-cli dynamic   ← breakpoints + a trigger → a full trace   (Node·Chrome via CDP)
+trace-cli serve     ← collector + realtime UI: show ALL traces live (Langfuse-style)
+trace-cli doctor    ← which backing tools are installed
+trace-cli schema    ← the output JSON Schema (the contract)
 ```
 
 It is **not coupled to any project** — ports, triggers, breakpoint files, and the source root all come from
@@ -26,13 +26,13 @@ One engine, one protocol driver — **CDP** for the JS family (Node `--inspect` 
 
 ```bash
 # Node (CDP): attach to a --inspect port, fire a curl, trace the request
-trace dynamic --node 9229 \
+trace-cli dynamic --node 9229 \
   --curl 'curl -s http://localhost:3000/v1/dashboard' \
   --bp src/dashboard/dashboard.service.ts:149 \
   --expr 'user.id'
 
-# Chrome (CDP): attach to --remote-debugging-port, navigate/reload, trace the render
-trace dynamic --chrome 9222 --url http://localhost:3000/route --bp src/pages/Thing.tsx:42
+# Chrome (CDP): attach to --remote-debugging-port, navigate (breakpoints bind before the first run), trace the render
+trace-cli dynamic --chrome 9222 --url http://localhost:3000/route --bp src/pages/Thing.tsx:42
 ```
 
 The engine is built around one `ProtocolDriver` interface, so additional debug protocols (DAP for Python, Go,
@@ -46,11 +46,11 @@ the debugger connect stalls). Chrome adds `--shot <png>`; it also **records a de
 (`data.recording.url`), else kept as a local path. `stdout` is the trace, `stderr` is `[trace]` logs; exit
 `0` ok · `1` runtime · `2` usage.
 
-See installed tooling with `trace doctor`.
+See installed tooling with `trace-cli doctor`.
 
-## Show all traces live — `trace serve` + Docker
+## Show all traces live — `trace-cli serve` + Docker
 
-`trace serve` runs a **collector + realtime web UI** (Langfuse-style): a session list that updates live over
+`trace-cli serve` runs a **collector + realtime web UI** (Langfuse-style): a session list that updates live over
 SSE, and a per-trace timeline with stack, locals, watched expressions, and response. Point any trace at it
 with `--emit`. Sessions persist in **Postgres**, so the collector needs a connection string — `DATABASE_URL`
 (or `POSTGRES_URL`, or `--db <url>`). The schema is created on first use; no migrations to run.
@@ -58,14 +58,14 @@ with `--emit`. Sessions persist in **Postgres**, so the collector needs a connec
 ```bash
 # locally (point at any Postgres; the trace_sessions table is created automatically)
 export DATABASE_URL=postgres://user:pass@localhost:5432/trace
-trace serve --port 4747                 # → http://localhost:4747
-trace dynamic --node 9229 --bp app.js:42 --curl '…' --emit http://localhost:4747
+trace-cli serve --port 4747                 # → http://localhost:4747
+trace-cli dynamic --node 9229 --bp app.js:42 --curl '…' --emit http://localhost:4747
 
 # as a Docker service: collector + UI + Postgres (session store) + a mock-aws (S3) for recordings
 docker compose up --build               # → http://localhost:4747 (UI), :5432 (Postgres), :9000/:9001 (S3)
 # then, from the host where your debug target is reachable:
 export S3_ENDPOINT=http://localhost:9000
-trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9 --emit http://localhost:4747
+trace-cli dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9 --emit http://localhost:4747
 ```
 
 Each trace envelope is one `trace_sessions` row (full envelope as JSONB + a precomputed summary). Chrome
@@ -76,12 +76,12 @@ talks the S3 API via the AWS SDK, no change), and the video link rides along in 
 
 The web UI is a **Next.js app** (App Router, static export) that lives in [`ui/`](ui/) as a self-contained
 sub-project. `npm run build` static-exports it (`output: 'export'` → `ui/out`) and copies the result into
-`dist/collector/ui`, which the collector serves at `/` alongside the API above — so `trace serve` stays a
+`dist/collector/ui`, which the collector serves at `/` alongside the API above — so `trace-cli serve` stays a
 single process with no extra port. To iterate on the UI with hot reload, run the collector for data and the
 Next dev server for the UI:
 
 ```bash
-trace serve --port 4000        # collector + API (data source)
+trace-cli serve --port 4000        # collector + API (data source)
 npm run dev:ui                 # Next.js dev → http://localhost:3000 (reads :4000 via ui/.env.development)
 ```
 
@@ -117,7 +117,7 @@ watched value, the ordered series of how it changed as flow continued (`total: 0
 agent sees value-over-time, not just per-hit snapshots. It surfaces in the human render, the JSON envelope,
 and the live UI. (Empty when nothing mutates, e.g. a single-hit trace.)
 
-Print the full JSON Schema with `trace schema` — it's at
+Print the full JSON Schema with `trace-cli schema` — it's at
 [`src/shared/trace.schema.json`](src/shared/trace.schema.json).
 
 ## As a library (class-first, TypeScript)
@@ -164,26 +164,26 @@ so the tracer has something to reveal:
 ```bash
 # Node (CDP)
 PORT=3100 node --inspect=9230 test/servers/node-api/server.js &
-trace dynamic --node 9230 --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1&coupon=SAVE10&region=US"' \
+trace-cli dynamic --node 9230 --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2,gadget:1&coupon=SAVE10&region=US"' \
   --bp "test/servers/node-api/server.js@subtotal += it.lineTotal" --expr subtotal --expr 'it.sku'
 
 # React (Chrome / CDP) — traced on the frontend through Vite source maps
 cd test/servers/react-app && npm install && npm run dev &     # serves :5180
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --headless=new --remote-debugging-port=9334 --user-data-dir=/tmp/chrome about:blank &
-trace dynamic --chrome 9334 --url http://localhost:5180 --root test/servers/react-app \
+trace-cli dynamic --chrome 9334 --url http://localhost:5180 --root test/servers/react-app \
   --bp "src/price.ts@sum = sum + parseInt" --expr sum
 ```
 
 Both emit the same envelope shape; add `--emit http://localhost:4747` to either of them to watch them land
-live in the `trace serve` UI.
+live in the `trace-cli serve` UI.
 
 ## Roadmap
 
 Built today: the **backend pillar** (Node · Chrome over CDP) + the **collector/UI** + Docker. Next, behind the
 same envelope: **DAP languages** (Python, Go, Java, C/C++) via a second `ProtocolDriver`, the **static** pillar
-(`trace static search|complexity|symbols|deps`), `trace exec` (OTel spans), `trace web` (Playwright), and
-`trace correlate` (the cross-tier `traceparent` handshake). See [`docs/MIGRATION.md`](docs/MIGRATION.md).
+(`trace-cli static search|complexity|symbols|deps`), `trace-cli exec` (OTel spans), `trace-cli web` (Playwright), and
+`trace-cli correlate` (the cross-tier `traceparent` handshake). See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ## License
 

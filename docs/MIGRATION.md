@@ -4,6 +4,11 @@
 **From:** v0.2.1 (single-purpose CDP execution tracer)
 **To:** v0.3.0 (multi-subcommand `trace` CLI that wraps existing OSS tools across three pillars and normalizes every tool's output to one JSON schema)
 
+> **Naming note (post-rename):** the installed command is now **`trace-cli`** (renamed from `trace` to avoid
+> colliding with macOS's `/usr/bin/trace`). The historical examples below predate the rename — read every
+> `trace …` invocation as `trace-cli …`. The deliberately-removed flat `trace --port/--chrome` interface is
+> unaffected (it no longer exists; see the CLI hard-cut note).
+
 ---
 
 ## 1. Thesis

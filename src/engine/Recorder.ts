@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { CdpDriver } from "../transport/CdpDriver.js";
 import type { CaptureResult } from "./Tracer.js";
 import type { TraceEvent } from "../domain/TraceEvent.js";
+import { sleep } from "../shared/sleep.js";
 
 const OW = 1360, OH = 860;
 const CHROME_CANDIDATES = [
@@ -14,7 +15,6 @@ const CHROME_CANDIDATES = [
   "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
 ].filter(Boolean) as string[];
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const oneLine = (v: unknown) => { const s = typeof v === "string" ? v : JSON.stringify(v); return (s == null ? String(v) : s).replace(/\s+/g, " ").slice(0, 240); };
 const locStr = (e: TraceEvent) => (e.loc ? `${e.loc.file}:${e.loc.line ?? ""}` : "");

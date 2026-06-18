@@ -13,7 +13,7 @@ test("manifest describes the tool and the whole command tree", () => {
   const m = manifest();
   assert.equal(m.tool, "trace");
   assert.match(m.version, /^\d+\.\d+\.\d+/);
-  assert.equal(m.command.name, "trace");
+  assert.equal(m.command.name, "trace-cli");
   const names = m.command.commands.map((c) => c.name).sort();
   // Generated from the parser — every registered subcommand appears, including manifest itself.
   assert.deepEqual(names, ["doctor", "dynamic", "export-skill", "manifest", "schema", "serve"]);
