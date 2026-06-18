@@ -31,8 +31,16 @@ $T --node 9230 \
   --curl 'curl -s "http://127.0.0.1:3100/checkout?cart=widget:2&coupon=SAVE10&region=MARS"' \
   --breakpoint "test/servers/node-api/server.js@const rate = RATES[region]" --expression region --expression 'Object.keys(RATES)'
 
-echo "# 3 — React parseInt bug: cart total drops the cents (sum: 0 → 19 → 43); records a video to S3"
-$T --chrome 9334 --url http://localhost:5180 --root test/servers/react-app --max-hits 5 \
-  --breakpoint "src/price.ts@sum = sum + parseInt" --expression sum --expression 'it.lineTotal'
+echo "# 3 — React parseInt bug: the cart total drops the cents, and the gap COMPOUNDS as items are added"
+echo "#     (sum: 0 → 19 → 43 …); a scripted journey adds two items live, recording a ~20s screen + trace video to S3"
+$T --chrome 9334 --root test/servers/react-app --max-hits 30 \
+  --breakpoint "src/price.ts@sum = sum + parseInt" --expression sum --expression 'it.lineTotal' --expression 'it.sku' \
+  --url http://localhost:5180 \
+  --step 'waitfor:text=Add headphones' \
+  --step 'wait:1300' \
+  --step 'click:text=Add headphones' \
+  --step 'wait:1500' \
+  --step 'click:text=Add cables' \
+  --step 'wait:1500'
 
 echo "# done — open $C"

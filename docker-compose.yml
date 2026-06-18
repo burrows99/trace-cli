@@ -1,7 +1,7 @@
-# Optional collector stack only: realtime UI/API collector, Postgres (session store), and local S3 (mock-aws) for recordings.
-# The `trace` CLI itself is native-first and should run on the host where debug targets are reachable.
+# Run the hosted trace dashboard (standalone Next.js: UI + same-origin API + SSE), Postgres (session store),
+# and a local S3 (mock-aws) for recordings:
 #   docker compose up --build
-#   open http://localhost:4747          # the trace UI (sessions persisted in Postgres)
+#   open http://localhost:4747          # the trace dashboard (sessions persisted in Postgres)
 #   open http://localhost:9001          # mock-aws (MinIO) console — minioadmin / minioadmin
 #   psql postgres://trace:trace@localhost:5432/trace -c 'select session_id, at from trace_sessions;'
 #
@@ -14,21 +14,23 @@
 # one demo container), no host setup — `docker compose up --build` starts everything; `docker compose down` stops it all:
 #   docker compose up --build                       # then watch all 3 traces (incl. the React video) at :4747
 services:
-  trace-collector:
+  dashboard:
     build: .
     image: trace-cli
-    container_name: trace-collector
+    container_name: trace-dashboard
     ports:
       - "4747:4747"
     environment:
-      # The collector is database-driven: sessions persist in Postgres (the `db` service).
+      # The dashboard is database-driven: sessions persist in Postgres (the `db` service).
       - DATABASE_URL=postgres://trace:trace@db:5432/trace
+      # Optional: export the dashboard's own OpenTelemetry spans to a collector (Jaeger / Grafana Tempo).
+      # - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
-  # Postgres — the session store. The collector persists every trace envelope here (JSONB) via DATABASE_URL;
+  # Postgres — the session store. The dashboard persists every trace envelope here (JSONB) via DATABASE_URL;
   # in production you point DATABASE_URL at a managed Postgres instead — no code change.
   db:
     image: postgres:16
@@ -67,7 +69,7 @@ services:
   # ───────────────────────── demo (one container, comes up/down with the stack) ─────────────────────────
   # The whole self-contained run of test/servers/scenarios.sh, collapsed into ONE container. It starts the
   # Node/React apps being traced + a headless Chrome on its own loopback, waits for them and the
-  # collector, then drives all 3 scenarios once (uploading the React video to mock-aws) and exits. One
+  # dashboard, then drives all 3 scenarios once (uploading the React video to mock-aws) and exits. One
   # container = one network namespace, so every target is on 127.0.0.1 (exactly as the CLI's localhost
   # discovery expects) and all app/debug ports stay inside it — no shared-netns anchor, no host clashes.
   demo:
@@ -80,7 +82,7 @@ services:
     volumes:
       - ./test/servers:/app/test/servers:ro     # scenarios + app sources (live-editable, no rebuild)
     environment:
-      - TRACE_COLLECTOR_URL=http://trace-collector:4747
+      - TRACE_COLLECTOR_URL=http://dashboard:4747
       - S3_ENDPOINT=http://mock-aws:9000        # upload the recording here (in-network)
       - S3_PUBLIC_URL=http://localhost:9000      # …but store a host-reachable link for the browser
       - S3_BUCKET=traces
@@ -88,5 +90,5 @@ services:
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - AWS_REGION=us-east-1
     depends_on:
-      - trace-collector
+      - dashboard
     restart: "no"

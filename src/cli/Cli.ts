@@ -281,7 +281,7 @@ export class Cli {
       });
 
     program.command("serve")
-      .description("collector + realtime UI: ingest envelopes (POST /v1/traces) and show all traces live")
+      .description("hosted dashboard: the standalone Next.js UI + same-origin API (ingest POST /v1/traces, list, live SSE), persisted to Postgres")
       .option("--port <n>", "port to listen on", parseIntArg, DEFAULT_COLLECTOR_PORT)
       .option("--host <h>", "host to bind (default 0.0.0.0)")
       .option("--database-url <url>", "Postgres connection string to persist sessions (env DATABASE_URL/POSTGRES_URL)")
@@ -313,6 +313,19 @@ export class Cli {
           process.exit(1);
         }
       });
+
+    // Verbosity is a property of every command, so add the pair to each rather than to the root (where it would
+    // only be honored before the subcommand). The preAction hook maps the flag onto the same TRACE_LOG_LEVEL the
+    // logger already reads — so `-v`, `-q` and an explicit env var are one mechanism, not three.
+    for (const command of program.commands) {
+      command.option("-v, --verbose", "verbose stderr logging: every phase marker + CDP transport (= TRACE_LOG_LEVEL=debug)");
+      command.option("-q, --quiet", "quiet stderr logging: errors only, no progress (= TRACE_LOG_LEVEL=error)");
+    }
+    program.hook("preAction", (_thisCommand, actionCommand) => {
+      const options = actionCommand.opts();
+      if (options.verbose) process.env.TRACE_LOG_LEVEL = "debug";
+      else if (options.quiet) process.env.TRACE_LOG_LEVEL = "error";
+    });
 
     return program;
   }

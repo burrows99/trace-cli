@@ -9,7 +9,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./server": "./dist/server.js"
   },
   "files": [
     "bin",
@@ -27,8 +28,8 @@
     "trace-cli": "node bin/trace",
     "build": "npm run build:cli && npm run build:ui",
     "build:cli": "tsc && cp src/shared/trace.schema.json dist/shared/trace.schema.json",
-    "build:ui": "npm --prefix ui install && npm --prefix ui run build && rm -rf dist/collector/ui && cp -R ui/out dist/collector/ui",
-    "dev:ui": "npm --prefix ui run dev",
+    "build:ui": "npm --prefix ui install --ignore-scripts && ln -sfn ../.. ui/node_modules/trace-cli && npm --prefix ui run build && rm -rf dist/dashboard && cp -R ui/.next/standalone dist/dashboard && cp -R ui/.next/static dist/dashboard/ui/.next/static && { [ -d ui/public ] && cp -R ui/public dist/dashboard/ui/public || true; }",
+    "dev:ui": "ln -sfn ../.. ui/node_modules/trace-cli && npm --prefix ui run dev",
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
     "test": "npm run build:cli && node --test test/*.test.js"

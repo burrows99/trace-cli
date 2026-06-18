@@ -80,7 +80,9 @@ trace-cli run --chrome --url http://localhost:5173/route --breakpoint src/pages/
 - **Trigger:** Node → `--curl`; Chrome → `--url` (one navigation) and/or `--step` — an ordered UI journey (`goto`/`click`/`type`/`waitfor`/`wait`/`newtab`/`eval`, validated against a fixed vocabulary); `--output <mp4>` sets the recording path.
 - **Chrome requires ≥1 `--breakpoint`** — debug + video are produced together. `--chrome <port>` attaches to a browser you launched (a real, logged-in session); bare `--chrome` launches a throwaway headless Chrome.
 - **Chrome always records** a debug-replay video (motion screencast + the live trace panel: stack/locals/watch) → uploaded to S3 if `S3_ENDPOINT` is set (`data.recording.url`), else kept as a local path.
-- **I/O & exit:** `stdout` = the trace; `stderr` = structured logs (`TRACE_LOG_LEVEL=debug|info|warn|error|silent`, `TRACE_LOG_FORMAT=json|pretty`); exit `0` ok · `1` runtime · `2` usage.
+- **The app's own output is captured too:** every `console.*` call and uncaught exception during the run lands in `data.console` (and the human render), so you see what the app *said* and *threw*, not just where it stopped.
+- **Progress is narrated** on `stderr` as it runs — attach → breakpoints armed → trigger fired → a heartbeat while waiting for hits → capture/record — so a slow trigger reads as progress, not a hang.
+- **I/O & exit:** `stdout` = the trace; `stderr` = structured logs. Verbosity: `-v`/`--verbose` (every phase + CDP transport) · `-q`/`--quiet` (errors only), or the `TRACE_LOG_LEVEL=debug|info|warn|error|silent` / `TRACE_LOG_FORMAT=json|pretty` env vars; exit `0` ok · `1` runtime · `2` usage.
 - Inputs **and** the emitted envelope are validated (class-validator) before anything runs or ships. Other knobs (hit cap, stack depth, source root, attach timeout) use sane defaults — kept off the flag surface.
 - One `ProtocolDriver` interface → more debug protocols (DAP: Python/Go/Java/C/C++/Rust) are a new driver behind the same envelope — see the [Roadmap](#roadmap).
 
@@ -175,7 +177,7 @@ trace-cli symbols src/app.ts          # a file's definition outline (functions/c
 
 ## The trace envelope
 
-- Every subcommand emits the same envelope; only `data` varies, built from shared shapes (`Loc`/`Symbol`/`Metric`/`Graph`/`Event`).
+- Every subcommand emits the same envelope; only `data` varies, built from shared shapes (`SourceLocation`/`Symbol`/`Metric`/`Graph`/`Event`).
 - `Event` is the unifier — a CDP breakpoint hit, a span, and a UI action all become `Event`s on one timeline, each tagged with `source` (`cdp`/`terminal`/`otel`) + a `sessionId` for cross-source correlation.
 
 ```jsonc
@@ -186,12 +188,12 @@ trace-cli symbols src/app.ts          # a file's definition outline (functions/c
   "data": {
     "breakpoints": [ { "file": "server.js", "line": 42, "bound": true } ],
     "events": [ {
-      "seq": 1, "kind": "breakpoint", "source": "cdp", "sessionId": "…",
-      "loc": { "file": "server.js", "line": 42 }, "label": "priceFor", "t": 12,
-      "attrs": { "stack": [ "…" ], "locals": { }, "exprs": { } }
+      "sequence": 1, "kind": "breakpoint", "source": "cdp", "sessionId": "…",
+      "location": { "file": "server.js", "line": 42 }, "label": "priceFor", "time": 12,
+      "attributes": { "stack": [ "…" ], "locals": { }, "exprs": { } }
     } ],
     "lineage": [ { "name": "total", "kind": "expr", "changes": 2,
-      "series": [ { "seq": 1, "value": 0 }, { "seq": 2, "value": 9.99, "changed": true } ] } ],
+      "series": [ { "sequence": 1, "value": 0 }, { "sequence": 2, "value": 9.99, "changed": true } ] } ],
     "response": { "exitCode": 0, "body": "…" }
   },
   "diagnostics": []

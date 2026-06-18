@@ -93,7 +93,7 @@ src/
     doctor.js             # tool presence + version probe
   schema/
     trace.schema.json     # THE CONTRACT (JSON Schema draft 2020-12)
-    envelope.js           # makeEnvelope(), shared shape builders (Loc/Symbol/Graph/Event/Metric), validate()
+    envelope.js           # makeEnvelope(), shared shape builders (SourceLocation/Symbol/Graph/Event/Metric), validate()
   adapters/               # (replaces empty src/backends/) one module per external tool
     ripgrep.js  lizard.js  treesitter.js  madge.js  otelcli.js  playwright.js
   engine/                 # today's CDP engine, MOVED here unchanged
@@ -146,13 +146,13 @@ Every subcommand emits the **same envelope**; only `data` varies, and `data` is 
 ### Shared shapes (the vocabulary)
 
 ```jsonc
-Loc    { file, line?, col?, endLine?, symbol?, lang? }
-Symbol { id, name, kind, loc: Loc, signature?, metrics?: Metric[] }
+SourceLocation    { file, line?, column?, endLine?, symbol?, language? }
+Symbol { id, name, kind, location: SourceLocation, signature?, metrics?: Metric[] }
 Metric { name, value, unit? }
-Graph  { nodes: [{ id, kind, label, loc?: Loc }],
+Graph  { nodes: [{ id, kind, label, location?: SourceLocation }],
          edges: [{ from, to, kind, weight? }] }
-Event  { seq, t, kind, loc?: Loc, label,
-         attrs?, traceId?, spanId?, parentSpanId? }   // the timeline primitive
+Event  { sequence, time, kind, location?: SourceLocation, label,
+         attributes?, traceId?, spanId?, parentSpanId? }   // the timeline primitive
 ```
 
 `Event` is the key unifier: a CDP breakpoint hit, an OTel span, and a Playwright action all become `Event`s
@@ -164,10 +164,10 @@ Today a hit is `{ seq, kind, at, fn, cls?, tMs, stack[], locals{}, exprs{}? }`. 
 
 ```jsonc
 Event {
-  "seq": 1, "kind": "breakpoint", "t": 142,
-  "loc": { "file": "src/dashboard/dashboard.service.ts", "line": 149 },   // parsed from `at`
+  "sequence": 1, "kind": "breakpoint", "time": 142,
+  "location": { "file": "src/dashboard/dashboard.service.ts", "line": 149 },   // parsed from `at`
   "label": "fetchDashboard",                                              // was `fn`
-  "attrs": { "stack": [...], "locals": {...}, "exprs": {...}, "cls": "DashboardService" }
+  "attributes": { "stack": [...], "locals": {...}, "exprs": {...}, "cls": "DashboardService" }
 }
 ```
 
@@ -274,7 +274,7 @@ stream to stdout/`--json`; these slot in behind the same schema when scale deman
 **Built & verified end-to-end (this milestone — the language-agnostic backend pillar):**
 
 - ✅ **Contract:** `src/schema/{envelope.js,trace.schema.json}` — envelope + shared shapes
-  (`Loc`/`Symbol`/`Metric`/`Graph`/`Event`), `Event` now `source`- and `sessionId`-tagged. 8 contract tests.
+  (`SourceLocation`/`Symbol`/`Metric`/`Graph`/`Event`), `Event` now `source`- and `sessionId`-tagged. 8 contract tests.
 - ✅ **Restructure:** engine moved to `src/engine/`; `src/commands/`, `src/adapters/`, `src/schema/` added.
 - ✅ **Protocol-pluggable engine:** CDP driver (`cdp.js`, Node/Chrome) **over `chrome-remote-interface`** +
   DAP driver (`dap.js`) **over the official `DebugClient`** (Python/debugpy; any DAP adapter). We own
