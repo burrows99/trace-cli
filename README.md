@@ -9,9 +9,8 @@ protocol, a span exporter, a shell) normalizes to one `Event`, and events are th
 one signal source. See [`docs/MIGRATION.md`](docs/MIGRATION.md) for the architecture and north star.
 
 ```
-trace-cli dynamic   ← breakpoints + a trigger → a full trace   (Node·Chrome via CDP)
-trace-cli graph     ← static call graph (the flow tree) for a function/route via LSP call hierarchy
-trace-cli journey   ← scripted UI journey across tabs → one motion screencast (Chrome via CDP)
+trace-cli dynamic   ← breakpoints + a trigger → a full trace   (Node curl · Chrome scripted journey + video, via CDP)
+trace-cli static    ← code structure without running it: graph (LSP call hierarchy) · deps · complexity · symbols
 trace-cli serve     ← collector + realtime UI: show ALL traces live (Langfuse-style)
 trace-cli doctor    ← which backing tools are installed
 trace-cli schema    ← the output JSON Schema (the contract)
@@ -33,8 +32,10 @@ trace-cli dynamic --node 9229 \
   --bp src/dashboard/dashboard.service.ts:149 \
   --expr 'user.id'
 
-# Chrome (CDP): attach to a running --remote-debugging-port, navigate (breakpoints bind before the first run), trace
-trace-cli dynamic --chrome 9222 --url http://localhost:3000/route --bp src/pages/Thing.tsx:42
+# Chrome (CDP): attach to a --remote-debugging-port and drive a scripted UI journey, recording a screen + trace-panel video
+trace-cli dynamic --chrome 9222 --bp src/pages/Thing.tsx:42 \
+  --url http://localhost:3000/login --step 'type:#email=me@example.com' --step 'click:text=Sign in'
+# --url alone is the single-navigation shorthand (one goto: step); --out <mp4> sets the recording path
 
 # …or omit the port — the CLI launches a throwaway headless Chrome itself, traces, records, and tears it down
 trace-cli dynamic --chrome --url http://localhost:5173/route --bp src/pages/Thing.tsx:42
@@ -45,9 +46,11 @@ Java, C/C++/Rust) are a new driver behind the same envelope — see the [roadmap
 
 Flags (both targets): `--bp <file:line | file@substring>` (repeatable) · `--expr '<js>'` (repeatable, evaluated
 at every hit) · `--json [path]` (envelope to a file, or bare `--json` for JSON on stdout). The trigger is
-target-specific: Node takes `--curl`, Chrome takes `--url`. `--chrome <port>` attaches to a browser you
-launched (a real, logged-in session); bare `--chrome` launches a throwaway headless Chrome for you.
-Everything else (hit cap, stack depth, source
+target-specific: Node takes `--curl`; Chrome takes `--url` (one navigation) and/or `--step` — an ordered UI
+journey (`goto`/`click`/`type`/`waitfor`/`wait`/`newtab`/`eval`, validated against a fixed vocabulary), with
+`--out <mp4>` for the recording path. Chrome requires at least one `--bp`: debug and video are produced
+together. `--chrome <port>` attaches to a browser you launched (a real, logged-in session); bare `--chrome`
+launches a throwaway headless Chrome for you. Everything else (hit cap, stack depth, source
 root, attach timeout) uses sane defaults — kept off the flag surface on purpose. Chrome **always records a
 debug-replay video** — a motion screencast of the page with the live trace panel (stack/locals/watch) beside
 each moment — uploaded to S3 if `S3_ENDPOINT` is set, with the link attached to the trace
@@ -96,7 +99,7 @@ trace-cli serve --port 4000        # collector + API (data source)
 npm run dev:ui                 # Next.js dev → http://localhost:3000 (reads :4000 via ui/.env.development)
 ```
 
-## Code graph — the flow tree (`trace-cli graph`)
+## Code graph — the flow tree (`trace-cli static graph`)
 
 Static call graph **without running anything**: point it at a function or route and it returns the outgoing-call
 tree — the deterministic "what calls what" for that entry. It drives a **language server over the Language
@@ -134,6 +137,15 @@ Caveats, all about the server/project (not the tool): the server must be **insta
 `callHierarchyProvider` (the CLI checks and errors clearly if not); the project must be **resolvable** by that
 server (e.g. clangd needs `compile_commands.json`); and it's a *call* graph — JSX `<Component/>` composition
 isn't a call, and calls nested in callbacks attribute to the callback, not the enclosing function.
+
+**Sibling static analyses** share the same envelope, each shelling out to its analyzer (and degrading to a
+clear error diagnostic when the tool isn't installed — `trace-cli doctor` shows what's present):
+
+```bash
+trace-cli static deps --entry src/index.ts   # module-import graph + circular-dependency groups   (madge)
+trace-cli static complexity src              # per-function cyclomatic complexity                  (lizard)
+trace-cli static symbols src/app.ts          # a file's definition outline (functions/classes/…)   (tree-sitter)
+```
 
 ## The contract: one envelope
 
@@ -228,12 +240,12 @@ them land live in the `trace-cli serve` UI.
 
 ## Roadmap
 
-Built today: the **backend pillar** (Node · Chrome over CDP, attach *or* auto-launch) + the **static pillar**
-(`trace-cli graph` — call graph / flow tree via LSP call hierarchy, any language with a call-hierarchy server) +
-the **collector/UI** + Docker. Next, behind the same envelope: **DAP languages** (Python, Go, Java, C/C++) for
-*dynamic* tracing via a second `ProtocolDriver`, more static analyzers (`complexity|symbols|deps`), `trace-cli
-exec` (OTel spans), `trace-cli web` (Playwright), and `trace-cli correlate` (the cross-tier `traceparent`
-handshake). See [`docs/MIGRATION.md`](docs/MIGRATION.md).
+Built today: the **backend pillar** (Node · Chrome over CDP, attach *or* auto-launch, scripted journeys +
+debug-replay video) + the **static pillar** (`trace-cli static` — `graph` via LSP call hierarchy for any
+language, plus `deps` (madge), `complexity` (lizard), `symbols` (tree-sitter)) + the **collector/UI** + Docker.
+Next, behind the same envelope: **DAP languages** (Python, Go, Java, C/C++) for *dynamic* tracing via a second
+`ProtocolDriver`, `trace-cli exec` (OTel spans), `trace-cli web` (Playwright), and `trace-cli correlate` (the
+cross-tier `traceparent` handshake). See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ## License
 
