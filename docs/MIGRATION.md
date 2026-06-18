@@ -55,11 +55,12 @@ trace schema               # print the JSON Schema (the contract)
 
 # REMOVED in 0.3.0 — the flat interface no longer exists. Use `trace-cli dynamic …` instead:
 #   trace-cli dynamic --node 9229   --curl '…' --bp file:line …
-#   trace-cli dynamic --chrome 9222 --url …     --bp file:line --record out.mp4 …
+#   trace-cli dynamic --chrome 9222 --url …     --bp file:line …   (Chrome auto-records the replay video)
 ```
 
-`stdout` = the JSON envelope (or the human render). `stderr` = `[trace]` logs. Exit codes unchanged
-(`0` ok · `1` runtime · `2` usage), plus `3` = required backing tool missing.
+`stdout` = the JSON envelope (or the human render). `stderr` = structured logs
+(`TRACE_LOG_LEVEL`/`TRACE_LOG_FORMAT`). Exit codes unchanged (`0` ok · `1` runtime · `2` usage), plus
+`3` = required backing tool missing.
 
 ### Subcommand → tool → normalization map
 
@@ -84,7 +85,7 @@ trace schema               # print the JSON Schema (the contract)
 src/
   cli.js                  # commander root; registers subcommands; default = dynamic (back-compat)
   commands/
-    dynamic.js            # wraps engine/trace.js → envelope (today's behavior, incl. --record/--shot)
+    dynamic.js            # wraps engine/trace.js → envelope (today's behavior, incl. auto-recorded Chrome replay)
     static.js             # deps | complexity | symbols | search dispatch
     exec.js               # otel-cli exec
     spans.js              # otel store query
