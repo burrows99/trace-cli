@@ -3,6 +3,7 @@
 import "reflect-metadata";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Command } from "commander";
 
 import { Cli } from "../dist/cli/Cli.js";
 import { ManifestCommand } from "../dist/cli/commands/ManifestCommand.js";
@@ -19,12 +20,15 @@ test("manifest describes the tool and the whole command tree", () => {
   assert.deepEqual(names, ["doctor", "dynamic", "export-skill", "journey", "manifest", "schema", "serve"]);
 });
 
-test("manifest captures option metadata: flags, defaults, negate", () => {
+test("manifest captures option metadata: flags, defaults, optional, negate", () => {
   const dyn = manifest().command.commands.find((c) => c.name === "dynamic");
   const bp = dyn.options.find((o) => o.flags.startsWith("--bp"));
   assert.ok(bp, "--bp option present");
-  assert.equal(dyn.options.find((o) => o.flags.includes("max-hits")).default, 25);
-  assert.equal(dyn.options.find((o) => o.flags.includes("no-record")).negate, true);
+  assert.deepEqual(bp.default, []); // repeatable collect accumulator defaults to []
+  assert.equal(dyn.options.find((o) => o.flags.startsWith("--node")).optional, true); // --node [port]
+  // negate extraction: the trimmed CLI has no --no-* flag, so verify the generator against a synthetic one.
+  const synthetic = new ManifestCommand().run(new Command().name("x").option("--no-color", "disable color"));
+  assert.equal(synthetic.command.options.find((o) => o.flags.includes("no-color")).negate, true);
 });
 
 test("manifest is deterministic — byte-identical across runs", () => {

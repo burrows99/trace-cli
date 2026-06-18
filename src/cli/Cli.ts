@@ -15,7 +15,7 @@ import { S3ArtifactStore } from "../storage/S3ArtifactStore.js";
 import { VERSION } from "../shared/version.js";
 import { TargetKind } from "../domain/Target.js";
 import { Diagnostic } from "../domain/Diagnostic.js";
-import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT, DEFAULT_VIEWPORT } from "../shared/defaults.js";
+import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
 import { DynamicInput, JourneyInput } from "./CommandInputs.js";
 import { logger } from "../shared/logger.js";
 import type { Trace } from "../domain/Trace.js";
@@ -57,57 +57,34 @@ export class Cli {
     if (isChrome && !o.url) usage("chrome target needs --url");
     if (!isChrome && !o.curl) usage(`${target} target needs --curl`);
 
-    const input = new DynamicInput({
-      target, port,
-      breakpoints: o.bp, exprs: o.expr,
-      steps: (o.steps || "").split(",").map((s: string) => s.trim()).filter(Boolean),
-      curl: o.curl, url: o.url, root: o.root,
-      maxHits: o.maxHits, frames: o.frames,
-      ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
-      ...(o.attachTimeoutMs ? { attachTimeoutMs: o.attachTimeoutMs } : {}),
-      ...(o.ws ? { wsUrl: o.ws } : {}),
-    });
+    const input = new DynamicInput({ target, port, breakpoints: o.bp, exprs: o.expr, curl: o.curl, url: o.url });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
 
     const { trace } = await this.#dynamic.run({
       target, port,
-      breakpoints: o.bp, root: o.root, exprs: o.expr,
-      steps: (o.steps || "").split(",").map((s: string) => s.trim()).filter(Boolean),
-      frames: o.frames, maxHits: o.maxHits, wsUrl: o.ws,
-      ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
-      ...(o.attachTimeoutMs ? { attachTimeoutMs: o.attachTimeoutMs } : {}),
-      curl: o.curl, url: o.url, shot: o.shot,
-      record: isChrome && o.record !== false,
-      recordOut: typeof o.record === "string" ? o.record : undefined,
+      breakpoints: o.bp, exprs: o.expr,
+      curl: o.curl, url: o.url,
+      record: isChrome, // Chrome always records the debug-replay video (uploads to S3 if S3_ENDPOINT is set)
       args: { target, port, bp: o.bp, ...(o.curl ? { curl: o.curl } : {}), ...(o.url ? { url: o.url } : {}) },
     });
 
     emit(trace, () => Renderer.render(trace) + Renderer.renderLineage(trace.data.lineage), o);
-    const collector = o.emit || process.env.TRACE_COLLECTOR_URL;
+    const collector = process.env.TRACE_COLLECTOR_URL;
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
   }
 
   async #runJourney(o: any): Promise<void> {
-    if (o.chrome == null) usage("journey needs --chrome <port>");
     if (!o.step.length) usage("journey needs at least one --step (e.g. --step goto:http://… --step click:text=Impersonate)");
     const steps = (o.step as string[]).map((s) => JourneyCommand.parseStep(s));
 
-    const input = new JourneyInput({
-      port: int(o.chrome), steps, out: o.out, match: o.match,
-      ...(o.width ? { width: int(o.width) } : {}), ...(o.height ? { height: int(o.height) } : {}),
-      ...(o.bp?.length ? { breakpoints: o.bp, exprs: o.expr, root: o.root, frames: o.frames } : {}),
-    });
+    const input = new JourneyInput({ port: o.chrome, steps, out: o.out });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
 
     const cmd = new JourneyCommand();
-    const result = await cmd.run({
-      port: int(o.chrome), steps, out: o.out, match: o.match,
-      ...(o.width ? { width: int(o.width) } : {}), ...(o.height ? { height: int(o.height) } : {}),
-      ...(o.bp?.length ? { breakpoints: o.bp, root: o.root, exprs: o.expr, frames: o.frames } : {}),
-    });
+    const result = await cmd.run({ port: o.chrome, steps, out: o.out });
     const problems = result.validate();
     if (problems.length) log.error("journey produced an invalid result", { problems });
     if (o.json) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -130,18 +107,7 @@ export class Cli {
       .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
       .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")
       .option("--url <url>", "trigger for chrome: page URL to navigate (breakpoints bind before the first run)")
-      .option("--root <dir>", "root for resolving relative --bp files (default cwd)")
-      .option("--max-hits <n>", "stop after N hits", int, 25)
-      .option("--frames <n>", "stack frames captured per hit", int, 6)
-      .option("--steps <list>", "step plan at the first hit (node/chrome): over,into,out")
-      .option("--timeout-ms <n>", "per-pause wait timeout", int)
-      .option("--attach-timeout-ms <n>", "fail fast if the debugger attach/connect stalls (default 8000)", int)
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .option("--emit <url>", "POST the envelope to a collector (env TRACE_COLLECTOR_URL); see `trace-cli serve`")
-      .option("--shot <png>", "chrome: write a screenshot to this path")
-      .option("--record [path]", "chrome: record a debug-replay video (ON by default; uploads to S3 if S3_ENDPOINT set)")
-      .option("--no-record", "chrome: skip the default video recording")
-      .option("--ws <url>", "explicit CDP WebSocket URL (node/chrome; skips target discovery)")
       .action((o) => this.#runDynamic(o));
 
     program.command("journey")
@@ -149,13 +115,6 @@ export class Cli {
       .requiredOption("--chrome <port>", "Chrome --remote-debugging-port target", int)
       .option("--step <s>", "journey step, repeatable & ordered: goto:<url> · click:<sel> · type:<sel>=<text> · waitfor:<sel> · wait:<ms> · newtab · eval:<js>  (sel: CSS or text=…)", collect, [])
       .option("--out <mp4>", "output video path (default: a temp file)")
-      .option("--match <url>", "attach to the existing page whose URL contains this (default: first page)")
-      .option("--width <n>", `screencast viewport width (default ${DEFAULT_VIEWPORT.width})`, int)
-      .option("--height <n>", `screencast viewport height (default ${DEFAULT_VIEWPORT.height})`, int)
-      .option("--bp <file:line>", "breakpoint to trace on opened tabs, repeatable — lays a live trace panel beside the screen", collect, [])
-      .option("--expr <js>", "expression evaluated at every breakpoint hit, repeatable", collect, [])
-      .option("--root <dir>", "root for resolving relative --bp files (default cwd)")
-      .option("--frames <n>", "stack frames captured per hit", int, 6)
       .option("--json", "print the journey result as JSON instead of a human summary")
       .action((o) => this.#runJourney(o));
 

@@ -22,49 +22,29 @@ export class DynamicInput {
   @IsInt() @Min(1) @Max(MAX_PORT) port: number;
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) breakpoints: string[];
   @IsArray() @IsString({ each: true }) exprs: string[];
-  @IsArray() @IsString({ each: true }) steps: string[];
   @IsOptional() @IsString() curl?: string;
   @IsOptional() @IsString() url?: string;
-  @IsOptional() @IsString() root?: string;
-  @IsInt() @Min(1) maxHits: number;
-  @IsInt() @Min(0) frames: number;
-  @IsOptional() @IsInt() @Min(0) timeoutMs?: number;
-  @IsOptional() @IsInt() @Min(0) attachTimeoutMs?: number;
-  @IsOptional() @IsString() wsUrl?: string;
 
   constructor(init: Partial<DynamicInput> = {}) {
     this.target = init.target ?? TargetKind.Node;
     this.port = init.port ?? 0;
     this.breakpoints = init.breakpoints ?? [];
     this.exprs = init.exprs ?? [];
-    this.steps = init.steps ?? [];
-    this.maxHits = init.maxHits ?? 0;
-    this.frames = init.frames ?? 0;
     Object.assign(this, init);
   }
 
   validate(): string[] { return problems(this); }
 }
 
-/** Input contract for `trace-cli journey`. `steps` are already-parsed Step objects (non-empty, validated shape). */
+/** Input contract for `trace-cli journey`. `steps` are already-parsed Step objects (non-empty). */
 export class JourneyInput {
   @IsInt() @Min(1) @Max(MAX_PORT) port: number;
   @IsArray() @ArrayNotEmpty() steps: unknown[];
-  @IsArray() @IsString({ each: true }) breakpoints: string[];
-  @IsArray() @IsString({ each: true }) exprs: string[];
   @IsOptional() @IsString() out?: string;
-  @IsOptional() @IsString() match?: string;
-  @IsOptional() @IsString() root?: string;
-  @IsOptional() @IsInt() @Min(1) width?: number;
-  @IsOptional() @IsInt() @Min(1) height?: number;
-  @IsInt() @Min(0) frames: number;
 
   constructor(init: Partial<JourneyInput> = {}) {
     this.port = init.port ?? 0;
     this.steps = init.steps ?? [];
-    this.breakpoints = init.breakpoints ?? [];
-    this.exprs = init.exprs ?? [];
-    this.frames = init.frames ?? 6;
     Object.assign(this, init);
   }
 
