@@ -13,6 +13,7 @@ export interface GeneratedLocation {
   lineNumber: number;
   columnNumber: number;
   scriptUrl: string;
+  scriptId: string;
   mapped: boolean;
 }
 
@@ -93,6 +94,24 @@ export class SourceMaps {
     this.#consumers.clear();
   }
 
+  /**
+   * Resolve a runtime stack frame (a URL + generated position, as found in `new Error().stack`) back to a
+   * `file:line` source location. Used by the non-pausing logpoint path, where the call stack arrives as a
+   * stack string rather than CDP `callFrames`. Returns null when the URL matches no parsed script (e.g. a
+   * node internal or the injected condition wrapper), so the caller can drop that frame.
+   */
+  async frameToSource(url: string, line1: number, col0: number): Promise<{ sourceRel: string; line: number } | null> {
+    const path = SourceMaps.pathOf(url);
+    for (const [scriptId, s] of this.driver.scripts()) {
+      if (!s.url) continue;
+      if (s.url === url || SourceMaps.pathOf(s.url) === path) {
+        const mapped = await this.generatedToSource(scriptId, line1 - 1, col0);
+        if (mapped) return mapped;
+      }
+    }
+    return null;
+  }
+
   /** Map a generated frame position back to { sourceRel, line } for display. */
   async generatedToSource(scriptId: string, line0: number, col: number): Promise<{ sourceRel: string; line: number } | null> {
     const url = this.driver.script(scriptId)?.url;
@@ -112,7 +131,7 @@ export class SourceMaps {
     let g = c.generatedPositionFor({ source: src, line, column: 0, bias: SourceMapConsumer.LEAST_UPPER_BOUND });
     if (g.line == null) g = c.generatedPositionFor({ source: src, line, column: 0, bias: SourceMapConsumer.GREATEST_LOWER_BOUND });
     if (g.line == null) return null;
-    return { urlRegex: SourceMaps.urlRegexFor(s.url!), lineNumber: g.line - 1, columnNumber: g.column || 0, scriptUrl: s.url!, mapped: true };
+    return { urlRegex: SourceMaps.urlRegexFor(s.url!), lineNumber: g.line - 1, columnNumber: g.column || 0, scriptUrl: s.url!, scriptId, mapped: true };
   }
 
   /** Resolve source `file:line` to a CDP breakpoint location — mapped scripts FIRST, then direct (plain JS). */
@@ -121,9 +140,9 @@ export class SourceMaps {
     const all = [...this.driver.scripts()];
     const primary = all.filter(([, s]) => s.url && SourceMaps.#baseNoExt(s.url) === bn);
     for (const [scriptId, s] of primary) { const r = await this.#tryMapScript(scriptId, s, file, line); if (r) return r; }
-    for (const [, s] of this.driver.scripts()) {
+    for (const [scriptId, s] of this.driver.scripts()) {
       if (s.url && SourceMaps.suffixMatch(s.url, file)) {
-        return { urlRegex: SourceMaps.urlRegexFor(s.url), lineNumber: line - 1, columnNumber: 0, scriptUrl: s.url, mapped: false };
+        return { urlRegex: SourceMaps.urlRegexFor(s.url), lineNumber: line - 1, columnNumber: 0, scriptUrl: s.url, scriptId, mapped: false };
       }
     }
     const seen = new Set(primary.map(([id]) => id));

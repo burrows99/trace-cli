@@ -21,16 +21,10 @@ export class CdpDriver implements ProtocolDriver {
   readonly source = "cdp" as const;
   #client: any;
   #scripts = new Map<string, ScriptInfo>();
-  #pausedQueue: any[] = [];
-  #pausedWaiter: ((p: any) => void) | null = null;
 
   private constructor(client: any) {
     this.#client = client;
     client.on(Cdp.Debugger.scriptParsed, (p: ScriptInfo) => { if (p?.url) this.#scripts.set(p.scriptId, p); });
-    client.on(Cdp.Debugger.paused, (p: any) => {
-      if (this.#pausedWaiter) { const w = this.#pausedWaiter; this.#pausedWaiter = null; w(p); }
-      else this.#pausedQueue.push(p);
-    });
   }
 
   static async connect(wsUrl: string, timeoutMs = DEFAULT_ATTACH_TIMEOUT_MS): Promise<CdpDriver> {
@@ -44,16 +38,6 @@ export class CdpDriver implements ProtocolDriver {
 
   send(method: string, params: Record<string, unknown> = {}): Promise<any> { return this.#client.send(method, params); }
   on(event: string, cb: (p: any) => void): void { this.#client.on(event, cb); }
-
-  waitForStop(ms: number): Promise<any | null> {
-    return new Promise((res, rej) => {
-      if (this.#pausedQueue.length) return res(this.#pausedQueue.shift());
-      const t = setTimeout(() => { this.#pausedWaiter = null; rej(new Error("timeout")); }, ms);
-      this.#pausedWaiter = (p) => { clearTimeout(t); res(p); };
-    });
-  }
-  hasQueued(): boolean { return this.#pausedQueue.length > 0; }
-  interrupt(): void { if (this.#pausedWaiter) { const w = this.#pausedWaiter; this.#pausedWaiter = null; w(null); } }
   close(): void { try { this.#client.close(); } catch { /* ignore */ } }
 
   // --- CDP-specific: the scriptParsed cache feeds source-map resolution ---
@@ -105,21 +89,4 @@ export class CdpDriver implements ProtocolDriver {
     }
     return t.webSocketDebuggerUrl as string;
   }
-}
-
-/** renderRemoteObject — a compact, human-readable value for a CDP RemoteObject. */
-export function renderRemoteObject(ro: any): unknown {
-  if (!ro) return undefined;
-  if ("value" in ro) return ro.value;
-  if (ro.unserializableValue) return ro.unserializableValue;
-  if (ro.type === "undefined") return undefined;
-  if (ro.subtype === "null") return null;
-  if (ro.type === "function") return `[Function${ro.className && ro.className !== "Function" ? ": " + ro.className : ""}]`;
-  if (ro.subtype === "promise") return `[Promise <${ro.description || "pending"}>]`;
-  const label = ro.className || ro.subtype || ro.type;
-  if (ro.preview?.properties) {
-    const props = ro.preview.properties.slice(0, 6).map((p: any) => `${p.name}: ${p.value}`).join(", ");
-    return `${label} { ${props}${ro.preview.overflow ? ", …" : ""} }`;
-  }
-  return ro.description ? `${label} (${String(ro.description).slice(0, 80)})` : `[${label}]`;
 }

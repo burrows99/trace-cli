@@ -161,13 +161,13 @@ export class Cli {
       .showHelpAfterError("(add --help for usage)");
 
     program.command("dynamic")
-      .description("breakpoints + a trigger → a full execution trace. Node (CDP): a --curl trigger. Chrome (CDP): a scripted UI journey (--url/--step) recorded as a screen + trace-panel replay — debug and video together.")
+      .description("breakpoints + a trigger → a full execution trace. Breakpoints are non-pausing logpoints: each hit ships its stack + in-scope locals + exprs without halting the VM, so the app runs at full speed. Node (CDP): a --curl trigger. Chrome (CDP): a scripted UI journey (--url/--step) recorded as a screen + trace-panel replay — debug and video together.")
       .option("--node [port]", `Node --inspect target (default; port ${DEFAULT_NODE_PORT})`)
       .option("--chrome [port]", "Chrome target: a running browser's --remote-debugging-port, or omit the port to launch a throwaway headless Chrome")
-      .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring", collect, [])
-      .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
+      .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring (non-pausing; in-scope locals are captured automatically)", collect, [])
+      .option("--expr <js>", "extra expression captured at every hit, repeatable — for computed/derived values beyond the auto-captured locals (e.g. user.id, cart.length)", collect, [])
       .option("--root <dir>", "project root for resolving --bp file paths and source maps (default: cwd) — needed when a file@substring breakpoint or a built app's sources live outside cwd")
-      .option("--max-hits <n>", "stop after this many breakpoint hits (default: node 25, chrome 30)", int)
+      .option("--max-hits <n>", "stop after this many breakpoint hits (default: 100; non-pausing logpoints, so a hot path is cheap to raise)", int)
       .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")
       .option("--url <url>", "chrome trigger shorthand: a page URL to navigate (equivalent to --step goto:<url>)")
       .option("--step <s>", "chrome journey step, repeatable & ordered: goto:<url> · click:<sel> · type:<sel>=<text> · waitfor:<sel> · wait:<ms> · newtab · eval:<js>  (sel: CSS or text=…)", collect, [])

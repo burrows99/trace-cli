@@ -7,6 +7,7 @@ Execution tracer & analyzer — one JSON envelope across breakpoint traces (Node
 
 Point it at a running program, give it breakpoints + a trigger → a full **execution trace** (every hit in order: call stack, locals, watched expressions, timing) as **one JSON envelope**, identical shape across targets.
 
+- **Breakpoints never pause the program.** They're armed as non-pausing *logpoints*: each hit captures its stack, every in-scope local (read statically from the source — no naming needed), and any extra `--expr`, then ships it out without halting the VM. The app runs at full speed, hot paths are cheap, and there's no human-style "stop and wait" — built for an agent that reads the trace and re-aims breakpoints, not a human stepping by hand. (Trade-off: capturing *all* locals automatically needs source the runtime can read by name — perfect for Node and dev-mode frontends; a minified production bundle yields mangled local names, though `--expr` and the stack still work.)
 - Not "a debugger" — **OpenTelemetry for software execution**: every source (debug protocol, span exporter, shell) normalizes to one `Event`; events are the asset. See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ```
