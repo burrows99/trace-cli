@@ -16,9 +16,9 @@ trace-cli doctor | schema   which backing tools are installed · the output JSON
 
 A Chrome run also records a **debug-replay video** — the live screen beside the breakpoint panel (stack/locals/watch), paced to each hit:
 
-[![Debug replay — Chrome journey + live trace panel](docs/assets/replay.png)](docs/assets/checkout-replay.mp4)
+![Debug replay — Chrome journey + live trace panel](docs/assets/checkout-replay.gif)
 
-*▶ [watch the replay](docs/assets/checkout-replay.mp4) (24s) — a checkout total drops the cents; the panel steps `sum: 0 → 19 → 43` as the bug compounds.*
+*A checkout total drops the cents; the panel steps `sum: 0 → 19 → 43` as the bug compounds. ▶ [full-res mp4](docs/assets/checkout-replay.mp4).*
 
 ## Install
 
