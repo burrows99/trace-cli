@@ -23,3 +23,5 @@ export { DoctorCommand } from "./cli/commands/DoctorCommand.js";
 export { ExportSkillCommand } from "./cli/commands/ExportSkillCommand.js";
 export { Cli } from "./cli/Cli.js";
 export { VERSION } from "./shared/version.js";
+export { logger, Logger } from "./shared/logger.js";
+export type { LogLevel } from "./shared/logger.js";

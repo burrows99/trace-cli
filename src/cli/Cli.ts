@@ -16,8 +16,11 @@ import { VERSION } from "../shared/version.js";
 import { TargetKind } from "../domain/Target.js";
 import { Diagnostic } from "../domain/Diagnostic.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT, DEFAULT_VIEWPORT } from "../shared/defaults.js";
+import { DynamicInput, JourneyInput } from "./CommandInputs.js";
+import { logger } from "../shared/logger.js";
 import type { Trace } from "../domain/Trace.js";
 
+const log = logger.child({ component: "cli" });
 const int = (v: string) => parseInt(v, 10);
 const collect = (v: string, acc: string[]) => { acc.push(v); return acc; };
 const usage = (msg: string): never => { process.stderr.write(`trace: ${msg}\n`); process.exit(2); };
@@ -37,7 +40,7 @@ function emit(trace: Trace, humanFn: () => string, o: any): void {
   const toFile = typeof o.json === "string";
   if (toFile) writeFileSync(o.json, JSON.stringify(json, null, 2));
   process.stdout.write((o.json === true ? JSON.stringify(json, null, 2) : humanFn()) + "\n");
-  if (toFile) process.stderr.write(`[trace] envelope JSON → ${o.json}\n`);
+  if (toFile) log.info("envelope written", { path: o.json });
 }
 
 /**
@@ -53,6 +56,19 @@ export class Cli {
     if (!o.bp.length) usage("dynamic needs at least one --bp (file:line or file@substring)");
     if (isChrome && !o.url) usage("chrome target needs --url");
     if (!isChrome && !o.curl) usage(`${target} target needs --curl`);
+
+    const input = new DynamicInput({
+      target, port,
+      breakpoints: o.bp, exprs: o.expr,
+      steps: (o.steps || "").split(",").map((s: string) => s.trim()).filter(Boolean),
+      curl: o.curl, url: o.url, root: o.root,
+      maxHits: o.maxHits, frames: o.frames,
+      ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
+      ...(o.attachTimeoutMs ? { attachTimeoutMs: o.attachTimeoutMs } : {}),
+      ...(o.ws ? { wsUrl: o.ws } : {}),
+    });
+    const badInput = input.validate();
+    if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
 
     const { trace } = await this.#dynamic.run({
       target, port,
@@ -77,15 +93,26 @@ export class Cli {
     if (o.chrome == null) usage("journey needs --chrome <port>");
     if (!o.step.length) usage("journey needs at least one --step (e.g. --step goto:http://… --step click:text=Impersonate)");
     const steps = (o.step as string[]).map((s) => JourneyCommand.parseStep(s));
+
+    const input = new JourneyInput({
+      port: int(o.chrome), steps, out: o.out, match: o.match,
+      ...(o.width ? { width: int(o.width) } : {}), ...(o.height ? { height: int(o.height) } : {}),
+      ...(o.bp?.length ? { breakpoints: o.bp, exprs: o.expr, root: o.root, frames: o.frames } : {}),
+    });
+    const badInput = input.validate();
+    if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
+
     const cmd = new JourneyCommand();
     const result = await cmd.run({
       port: int(o.chrome), steps, out: o.out, match: o.match,
       ...(o.width ? { width: int(o.width) } : {}), ...(o.height ? { height: int(o.height) } : {}),
       ...(o.bp?.length ? { breakpoints: o.bp, root: o.root, exprs: o.expr, frames: o.frames } : {}),
     });
+    const problems = result.validate();
+    if (problems.length) log.error("journey produced an invalid result", { problems });
     if (o.json) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
     else process.stdout.write(cmd.render(result) + "\n");
-    process.exit(result.ok ? 0 : 1);
+    process.exit(result.ok && problems.length === 0 ? 0 : 1);
   }
 
   build(): Command {
@@ -168,7 +195,7 @@ export class Cli {
         try {
           const { src, dest } = new ExportSkillCommand().run({ dir, force: o.force });
           process.stdout.write(`[trace] skill exported → ${dest}\n`);
-          process.stderr.write(`[trace] source: ${src}\n`);
+          log.info("skill exported", { src, dest });
           process.exit(0);
         } catch (e: any) {
           process.stderr.write(`trace: ${e.message}\n`);

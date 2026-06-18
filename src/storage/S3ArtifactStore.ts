@@ -1,5 +1,8 @@
 import { createReadStream, statSync } from "node:fs";
 import type { ArtifactStore, UploadedArtifact } from "./ArtifactStore.js";
+import { logger } from "../shared/logger.js";
+
+const log = logger.child({ component: "s3" });
 
 interface S3Config {
   endpoint: string;
@@ -56,9 +59,10 @@ export class S3ArtifactStore implements ArtifactStore {
       await s3.send(new PutObjectCommand({
         Bucket: c.bucket, Key: key, Body: createReadStream(filePath), ContentLength: bytes, ContentType: contentType,
       }));
+      log.info("uploaded artifact", { bucket: c.bucket, key, bytes });
       return { url: `${c.publicBase}/${c.bucket}/${key}`, bucket: c.bucket, key, bytes };
     } catch (e: any) {
-      process.stderr.write(`[trace] s3 upload failed: ${e.message}\n`);
+      log.error("upload failed", { key, err: e });
       return null;
     }
   }

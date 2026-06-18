@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { IsBoolean, IsInt, IsOptional, IsString } from "class-validator";
 
 import { CdpDriver, log } from "../transport/CdpDriver.js";
 import { Cdp } from "../transport/cdp.js";
@@ -12,7 +13,24 @@ import { TraceEvent } from "../domain/TraceEvent.js";
 import { sleep } from "../shared/sleep.js";
 
 export interface Step { action: "goto" | "eval" | "click" | "type" | "wait" | "waitfor" | "newtab"; arg?: string; value?: string; }
-export interface StepResult { seq: number; step: string; t: number; ok: boolean; note?: string; url?: string; }
+
+/** StepResult — the validated outcome of one journey step (nested under JourneyResult). */
+export class StepResult {
+  @IsInt() seq: number;
+  @IsString() step: string;
+  @IsInt() t: number;
+  @IsBoolean() ok: boolean;
+  @IsOptional() @IsString() note?: string;
+  @IsOptional() @IsString() url?: string;
+
+  constructor(init: Partial<StepResult> = {}) {
+    this.seq = init.seq ?? 0;
+    this.step = init.step ?? "";
+    this.t = init.t ?? 0;
+    this.ok = init.ok ?? false;
+    Object.assign(this, init);
+  }
+}
 export interface TracedHit { ev: TraceEvent; t: number; }
 export interface TraceConfig { bps: ResolvedBp[]; root?: string; exprs: string[]; frames: number; maxHits: number; }
 
@@ -215,7 +233,7 @@ export class JourneyRunner {
       } catch (e: any) { ok = false; note = String(e?.message || e).split("\n")[0]; }
       const url = await this.#eval("location.href", false).catch(() => undefined);
       this.finalUrl = url || this.finalUrl;
-      results.push({ seq, step: label, t: Date.now() - this.#t0, ok, ...(note ? { note } : {}), ...(url ? { url } : {}) });
+      results.push(new StepResult({ seq, step: label, t: Date.now() - this.#t0, ok, ...(note ? { note } : {}), ...(url ? { url } : {}) }));
       log(`step ${seq} ${label} → ${ok ? "ok" : "FAILED" + (note ? " (" + note + ")" : "")}`);
       await sleep(250); // a beat between steps so the video reads
     }

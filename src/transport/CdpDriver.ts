@@ -4,8 +4,11 @@ import { Cdp } from "./cdp.js";
 import { TargetKind, TARGET_LABEL } from "../domain/Target.js";
 import { withDeadline } from "../shared/deadline.js";
 import { DEFAULT_ATTACH_TIMEOUT_MS } from "../shared/defaults.js";
+import { logger } from "../shared/logger.js";
 
-export const log = (...a: unknown[]) => console.error("[trace]", ...a);
+const cdpLog = logger.child({ component: "cdp" });
+/** Verbose transport trace — debug level, so it's quiet by default and surfaced with TRACE_LOG_LEVEL=debug. */
+export const log = (...a: unknown[]) => cdpLog.debug(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 
 export interface ScriptInfo { scriptId: string; url?: string; sourceMapURL?: string; [k: string]: unknown; }
 

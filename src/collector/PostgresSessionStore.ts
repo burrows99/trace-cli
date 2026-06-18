@@ -1,7 +1,9 @@
 import pg from "pg";
 import { type SessionStore, type SessionSummary, type EnvelopePlain, summarize } from "./SessionStore.js";
+import { logger } from "../shared/logger.js";
 
 const { Pool } = pg;
+const log = logger.child({ component: "postgres" });
 
 /**
  * PostgresSessionStore — the SessionStore, backed by Postgres. Each trace envelope lands in one
@@ -25,7 +27,7 @@ export class PostgresSessionStore implements SessionStore {
     this.#table = table;
     this.#pool = new Pool({ connectionString });
     // Surface pool-level errors instead of crashing the process on an idle-client disconnect.
-    this.#pool.on("error", (e) => process.stderr.write(`[trace] pg pool error: ${e.message}\n`));
+    this.#pool.on("error", (e) => log.error("pool error", { table: this.#table, err: e }));
   }
 
   /** Create the table + index once; every data method awaits this first. */
@@ -39,7 +41,7 @@ export class PostgresSessionStore implements SessionStore {
          ingested_at timestamptz NOT NULL DEFAULT now()
        );
        CREATE INDEX IF NOT EXISTS ${this.#table}_at_idx ON ${this.#table} (at DESC NULLS LAST);`,
-    ).then(() => undefined));
+    ).then(() => log.debug("schema ready", { table: this.#table })));
   }
 
   async ingest(env: EnvelopePlain): Promise<SessionSummary | null> {

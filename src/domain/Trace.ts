@@ -7,7 +7,7 @@ import { TraceEvent } from "./TraceEvent.js";
 import { Lineage } from "./Lineage.js";
 import { Recording } from "./Recording.js";
 import { Diagnostic } from "./Diagnostic.js";
-import type { TargetRef } from "./Target.js";
+import { TargetRef } from "./Target.js";
 
 export class TraceMeta {
   @IsString() at: string;
@@ -63,7 +63,7 @@ export class Trace {
   @IsString() command: string;
   @IsBoolean() ok: boolean;
   @ValidateNested() @Type(() => TraceMeta) meta: TraceMeta;
-  @IsOptional() @IsObject() target: TargetRef | null;
+  @IsOptional() @ValidateNested() @Type(() => TargetRef) target: TargetRef | null;
   @ValidateNested() @Type(() => TraceData) data: TraceData;
   @IsArray() @ValidateNested({ each: true }) @Type(() => Diagnostic) diagnostics: Diagnostic[];
 

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { JourneyRunner, type Step, type StepResult } from "../../engine/JourneyRunner.js";
+import { Type } from "class-transformer";
+import { IsArray, IsBoolean, IsInt, IsOptional, IsString, ValidateNested, validateSync, type ValidationError } from "class-validator";
+
+import { JourneyRunner, StepResult, type Step } from "../../engine/JourneyRunner.js";
 import { Screencaster } from "../../engine/Screencaster.js";
 import { Recorder } from "../../engine/Recorder.js";
 import { BreakpointResolver } from "../../engine/BreakpointResolver.js";
@@ -22,14 +25,35 @@ export interface JourneyRequest {
   sessionId?: string;
 }
 
-export interface JourneyResult {
-  ok: boolean;
-  recording?: string;
-  traced: boolean;
-  hits: number;
-  finalUrl?: string;
-  frames: number;
-  steps: StepResult[];
+/** JourneyResult — the validated outcome of a journey run; serialized to stdout under `--json`. */
+export class JourneyResult {
+  @IsBoolean() ok: boolean;
+  @IsOptional() @IsString() recording?: string;
+  @IsBoolean() traced: boolean;
+  @IsInt() hits: number;
+  @IsOptional() @IsString() finalUrl?: string;
+  @IsInt() frames: number;
+  @IsArray() @ValidateNested({ each: true }) @Type(() => StepResult) steps: StepResult[];
+
+  constructor(init: Partial<JourneyResult> = {}) {
+    this.ok = init.ok ?? false;
+    this.traced = init.traced ?? false;
+    this.hits = init.hits ?? 0;
+    this.frames = init.frames ?? 0;
+    this.steps = init.steps ?? [];
+    Object.assign(this, init);
+  }
+
+  /** Strict structural validation; returns [] when valid, else "field[.child]: message" lines. */
+  validate(): string[] {
+    const flatten = (errs: ValidationError[], path = ""): string[] =>
+      errs.flatMap((e) => {
+        const at = path ? `${path}.${e.property}` : e.property;
+        const here = Object.values(e.constraints ?? {}).map((m) => `${at}: ${m}`);
+        return e.children?.length ? here.concat(flatten(e.children, at)) : here;
+      });
+    return flatten(validateSync(this, { whitelist: true, forbidNonWhitelisted: true }));
+  }
 }
 
 /**
@@ -72,7 +96,7 @@ export class JourneyCommand {
     const recording = (runner.traced.length
       ? await Recorder.renderJourney(cast.frames(), runner.traced, out).catch(() => null)
       : await cast.render(out).catch(() => null)) ?? undefined;
-    return { ok: steps.every((s) => s.ok), recording, traced: runner.traced.length > 0, hits: runner.traced.length, finalUrl: runner.finalUrl, frames, steps };
+    return new JourneyResult({ ok: steps.every((s) => s.ok), recording, traced: runner.traced.length > 0, hits: runner.traced.length, finalUrl: runner.finalUrl, frames, steps });
   }
 
   render(r: JourneyResult): string {

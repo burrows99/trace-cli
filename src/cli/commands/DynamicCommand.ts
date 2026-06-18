@@ -9,9 +9,12 @@ import { LineageAnalyzer } from "../../analysis/LineageAnalyzer.js";
 import { Trace, TraceMeta, TraceData, CurlResponse } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
 import { Recording } from "../../domain/Recording.js";
-import { TargetKind } from "../../domain/Target.js";
+import { TargetKind, TargetRef } from "../../domain/Target.js";
 import type { ArtifactStore } from "../../storage/ArtifactStore.js";
 import { VERSION } from "../../shared/version.js";
+import { logger } from "../../shared/logger.js";
+
+const log = logger.child({ component: "dynamic" });
 
 export type DynamicTargetKind = TargetKind;
 
@@ -74,7 +77,7 @@ export class DynamicCommand {
       command: `dynamic.${c.target}`,
       ok: !c.fatal,
       meta: new TraceMeta({ at: new Date().toISOString(), sessionId: ctx.sessionId, args: ctx.args, durationMs: Math.round(performance.now() - ctx.startedAtMs) }),
-      target: { kind: c.target, source, trigger: c.trigger },
+      target: new TargetRef({ kind: c.target, source, trigger: c.trigger }),
       data,
       diagnostics,
     });
@@ -85,12 +88,13 @@ export class DynamicCommand {
     try {
       const path = out ?? join(tmpdir(), `trace-${sessionId}.mp4`);
       const mp4 = await Recorder.renderJourney(capture.frames ?? [], capture.traced ?? [], path);
-      if (!mp4) { process.stderr.write("[trace] no frames captured — nothing to record\n"); return; }
+      if (!mp4) { log.warn("no frames captured — nothing to record", { sessionId }); return; }
       const up = this.artifacts && this.artifacts.isConfigured() ? await this.artifacts.upload(mp4, `recordings/${sessionId}.mp4`, "video/mp4") : null;
       trace.data.recording = up ? new Recording({ url: up.url, bytes: up.bytes }) : new Recording({ path: mp4 });
-      process.stderr.write(up ? `[trace] recording → ${up.url}\n` : `[trace] recording → ${mp4} (set S3_ENDPOINT to upload + get a link)\n`);
+      if (up) log.info("recording uploaded", { sessionId, url: up.url, bytes: up.bytes });
+      else log.info("recording saved locally — set S3_ENDPOINT to upload + get a link", { sessionId, path: mp4 });
     } catch (e: any) {
-      process.stderr.write(`[trace] recording failed: ${e.message}\n`);
+      log.error("recording failed", { sessionId, err: e });
     }
   }
 }

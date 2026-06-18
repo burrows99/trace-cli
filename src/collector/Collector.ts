@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { createSessionStore } from "./createSessionStore.js";
 import type { SessionStore } from "./SessionStore.js";
+import { Trace } from "../domain/Trace.js";
 import { DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
+import { logger } from "../shared/logger.js";
+
+const log = logger.child({ component: "collector" });
 
 const here = dirname(fileURLToPath(import.meta.url));
 // The Next.js static export (ui/out) is copied here by the build (see package.json `build`).
@@ -78,10 +82,10 @@ export class Collector {
     const endpoint = url.replace(/\/+$/, "") + "/v1/traces";
     try {
       const r = await fetch(endpoint, { method: "POST", headers: { "content-type": CT_JSON }, body: JSON.stringify(envelope) });
-      process.stderr.write(`[trace] emitted → ${endpoint} (${r.status})\n`);
+      log.info("emitted envelope", { endpoint, status: r.status });
       return r.ok;
     } catch (e: any) {
-      process.stderr.write(`[trace] emit failed (${endpoint}): ${e.message}\n`);
+      log.error("emit failed", { endpoint, err: e });
       return false;
     }
   }
@@ -91,7 +95,9 @@ export class Collector {
     const store = this.#store;
 
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const startedAt = Date.now();
       const url = new URL(req.url ?? "/", "http://localhost");
+      res.on("finish", () => log.debug("request", { method: req.method, path: url.pathname, status: res.statusCode, durationMs: Date.now() - startedAt }));
       const json = (code: number, obj: unknown) => { res.writeHead(code, { "content-type": CT_JSON, ...CORS_ORIGIN }); res.end(JSON.stringify(obj)); };
 
       if (req.method === "OPTIONS") { res.writeHead(204, CORS_PREFLIGHT); return res.end(); }
@@ -114,13 +120,19 @@ export class Collector {
 
       if (req.method === "POST" && (url.pathname === "/v1/traces" || url.pathname === "/api/ingest")) {
         let body = "";
-        req.on("data", (c) => { body += c; if (body.length > 64 * 1024 * 1024) req.destroy(); });
+        req.on("data", (c) => { body += c; if (body.length > 64 * 1024 * 1024) { log.warn("ingest body too large — connection destroyed", { bytes: body.length }); req.destroy(); } });
         req.on("end", async () => {
           try {
-            const s = await store.ingest(JSON.parse(body));
-            if (!s) return json(400, { error: "envelope has no meta.sessionId" });
+            // Ingress boundary: hydrate untrusted JSON into a Trace and enforce the envelope contract before
+            // it touches the store. Reject malformed envelopes with their violations instead of persisting them.
+            const env = Trace.fromPlain(JSON.parse(body));
+            const problems = env.validate();
+            if (problems.length) { log.warn("rejected invalid envelope", { bytes: body.length, problems }); return json(400, { error: "invalid envelope", problems }); }
+            const s = await store.ingest(env.toJSON());
+            if (!s) { log.warn("rejected envelope without meta.sessionId", { bytes: body.length }); return json(400, { error: "envelope has no meta.sessionId" }); }
+            log.info("ingested envelope", { sessionId: s.sessionId, command: s.command, events: s.eventCount, errors: s.errors, warns: s.warns });
             json(200, { ok: true, sessionId: s.sessionId });
-          } catch (e: any) { json(400, { error: e.message }); }
+          } catch (e: any) { log.warn("ingest failed", { err: e }); json(400, { error: e.message }); }
         });
         return;
       }
@@ -139,8 +151,8 @@ export class Collector {
 
     server.listen(port, host, () => {
       store.size()
-        .then((n) => process.stderr.write(`[trace] collector + UI → http://localhost:${port}  (data via ${this.#store.constructor.name}, ${n} sessions)\n`))
-        .catch((e) => process.stderr.write(`[trace] collector + UI → http://localhost:${port}  (data via ${this.#store.constructor.name}; store unavailable: ${e.message})\n`));
+        .then((n) => log.info("collector + UI listening", { url: `http://localhost:${port}`, store: this.#store.constructor.name, sessions: n }))
+        .catch((e) => log.warn("collector + UI listening; store unavailable", { url: `http://localhost:${port}`, store: this.#store.constructor.name, err: e }));
     });
     return server;
   }
