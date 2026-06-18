@@ -77,7 +77,7 @@ export class Collector {
     this.#store = store ?? createSessionStore();
   }
 
-  /** POST an envelope to a remote collector's /v1/traces (used by `trace dynamic --emit`). */
+  /** POST an envelope to a remote collector's /v1/traces (used when TRACE_COLLECTOR_URL is set). */
   static async emit(url: string, envelope: unknown): Promise<boolean> {
     const endpoint = url.replace(/\/+$/, "") + "/v1/traces";
     try {
@@ -118,7 +118,7 @@ export class Collector {
         return;
       }
 
-      if (req.method === "POST" && (url.pathname === "/v1/traces" || url.pathname === "/api/ingest")) {
+      if (req.method === "POST" && url.pathname === "/v1/traces") {
         let body = "";
         req.on("data", (c) => { body += c; if (body.length > 64 * 1024 * 1024) { log.warn("ingest body too large — connection destroyed", { bytes: body.length }); req.destroy(); } });
         req.on("end", async () => {

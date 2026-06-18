@@ -39,9 +39,8 @@ shell around it, not rewrite it.
 
 ## 2. Target CLI surface
 
-Root command gains subcommands. *(Proposed at the time: keep the existing flat interface as the default
-command for back-compat. This is **not** what shipped — see §"CLI hard-cut" below: the flat
-`trace --port/--chrome` interface was removed in 0.3.0 in favour of `trace-cli dynamic --node|--chrome`.)*
+Root command gains subcommands. The old flat `trace --port/--chrome` interface was removed in 0.3.0 — there is
+no back-compat shim; every trace runs through `trace-cli dynamic --node|--chrome`.
 
 ```
 trace dynamic   ...        # today's engine: breakpoints + trigger → hits (Node or Chrome)
@@ -83,7 +82,7 @@ trace schema               # print the JSON Schema (the contract)
 
 ```
 src/
-  cli.js                  # commander root; registers subcommands; default = dynamic (back-compat)
+  cli.js                  # commander root; registers subcommands
   commands/
     dynamic.js            # wraps engine/trace.js → envelope (today's behavior, incl. auto-recorded Chrome replay)
     static.js             # deps | complexity | symbols | search dispatch
@@ -175,8 +174,7 @@ Event {
 `breakpoints[]`, `response`, `console[]`, `network[]`, `finalUrl`, `screenshot` move under `data`/`target`
 unchanged. **The engine keeps emitting its existing rich internal result**; a thin `normalize()` at the CLI
 edge maps it to the envelope. `render.js` and `record.js` keep consuming the internal result, so the
-recorder/human-render path carries zero migration risk. A `--legacy-json` flag (or `--format legacy`) can
-still emit today's exact shape during a deprecation window.
+recorder/human-render path carries zero migration risk.
 
 ---
 
@@ -185,7 +183,7 @@ still emit today's exact shape during a deprecation window.
 | Phase | Deliverable | Risk |
 |---|---|---|
 | **0 — Contract** | `schema/trace.schema.json` + `envelope.js` + validator + golden fixtures. No behavior change. | low |
-| **1 — `dynamic`** | Move engine → `engine/`; add `trace dynamic` wrapping `traceNode`/`traceChrome`; **keep bare-flag back-compat**; update `index.js`, skill, plugin. Existing smoke tests pass unchanged. | low |
+| **1 — `dynamic`** | Move engine → `engine/`; add `trace-cli dynamic` wrapping `traceNode`/`traceChrome`; hard-cut the flat `trace --port/--chrome` interface; update `index.js`, skill, plugin. | low |
 | **2 — `doctor` + adapters scaffold** | `trace doctor`; `adapters/` with `detect()` for each tool; normalize stubs. | low |
 | **3 — Static pillar** | `static search`(rg) → `static complexity`(lizard) → `static symbols`(tree-sitter) → `static deps`(madge/ts). Each small & independent. | low–med |
 | **4 — Runtime spans** | `trace exec` via `otel-cli`; optional `spans query`. | med |
@@ -199,8 +197,8 @@ Phases 3–6 are independent; ship in any order or drop any pillar without block
 
 ## 6. Honest callouts / risks (carried from the design notes + added)
 
-- **Backward compatibility is a hard requirement.** The plugin + skill ship `trace --port/--chrome`. Phase 1
-  keeps that as the default command; we never force `trace dynamic`.
+- **No backward compatibility.** 0.3.0 hard-cut the flat `trace --port/--chrome` interface; the plugin + skill
+  ship `trace-cli dynamic` only.
 - **Language-agnostic deps:** `madge` is JS/TS only; `pydeps`/`go-callvis` are per-language. Recommend
   `tree-sitter` + `ripgrep` as the *universal* fallback and treat per-language dep tools as optional adapters.
 - **Playwright `trace.json` is not a stable public API.** Pin the Playwright version, parse behind an adapter
@@ -216,8 +214,8 @@ Phases 3–6 are independent; ship in any order or drop any pillar without block
 
 ## 7. Open decisions to confirm before Phase 1
 
-1. **Back-compat strategy:** keep bare `trace --port/--chrome` working as the default command *(recommended)*,
-   or hard-cut to `trace dynamic …` (major bump, rewrite skill)?
+1. **Back-compat strategy:** *(resolved)* hard-cut — the flat `trace --port/--chrome` interface was removed in
+   0.3.0; `trace-cli dynamic …` is the only entry point.
 2. **Backing-tool packaging:** bring-your-own-binary + `doctor` *(recommended, keeps install light &
    language-agnostic)*, vs. `optionalDependencies`, vs. hard `dependencies`?
 3. **v1 pillar scope:** which pillars are in the first milestone? (e.g. Static + keep CDP now; OTel/Playwright/
