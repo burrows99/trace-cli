@@ -113,10 +113,12 @@ export class Cli {
     // an `eval:` step an arbitrary script body.
     const redactStep = (step: string) => step.startsWith("type:") ? step.replace(/=.*/s, "=***") : step.startsWith("eval:") ? "eval:***" : step;
 
-    // --emit <url> (or TRACE_COLLECTOR_URL) → stream to the collector. Emits are serialized through one promise
-    // chain so a slow POST can't land a stale (smaller) envelope after a newer one; each ingest upserts the
-    // session row (keyed on sessionId) and re-broadcasts over SSE, so the dashboard updates live as it runs.
-    const collector = options.emit ?? process.env.TRACE_COLLECTOR_URL;
+    // Stream to the collector. An explicit --emit / TRACE_COLLECTOR_URL wins; otherwise we auto-discover a
+    // collector listening locally, so a running `trace serve` dashboard catches the run with zero config.
+    // Emits are serialized through one promise chain so a slow POST can't land a stale (smaller) envelope after
+    // a newer one; each ingest upserts the session row (keyed on sessionId) and re-broadcasts over SSE, so the
+    // dashboard updates live as it runs.
+    const collector = await Collector.resolve(options.emit);
     let emitChain: Promise<unknown> = Promise.resolve();
     const emitToCollector = collector ? (envelope: unknown) => { emitChain = emitChain.then(() => Collector.emit(collector, envelope).catch(() => false)); } : undefined;
 
@@ -158,6 +160,8 @@ export class Cli {
       writeFileSync(htmlPath, command.renderHtml(trace));
       log.info("graph HTML written", { path: htmlPath });
     }
+    // Static analyses carry no sessionId, so the session dashboard can't ingest them — emit only when a
+    // collector is explicitly configured (no auto-discovery here, unlike a dynamic trace run).
     const collector = process.env.TRACE_COLLECTOR_URL;
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
@@ -166,7 +170,7 @@ export class Cli {
   /** Shared tail for the static analyses: emit the envelope, forward to a collector, exit on the error state. */
   async #finish(trace: Trace, render: () => string, options: any): Promise<never> {
     emit(trace, render, options);
-    const collector = process.env.TRACE_COLLECTOR_URL;
+    const collector = process.env.TRACE_COLLECTOR_URL;   // static: explicit-only (no sessionId → dashboard can't ingest)
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
   }
@@ -189,7 +193,7 @@ export class Cli {
       writeFileSync(htmlPath, command.renderHtml(trace));
       log.info("deps HTML written", { path: htmlPath });
     }
-    const collector = process.env.TRACE_COLLECTOR_URL;
+    const collector = process.env.TRACE_COLLECTOR_URL;   // static: explicit-only (no sessionId → dashboard can't ingest)
     if (collector) await Collector.emit(collector, trace.toJSON());
     process.exit(trace.hasErrors() ? 1 : 0);
   }
@@ -227,7 +231,7 @@ export class Cli {
       .option("--url <url>", "chrome trigger shorthand: a page URL to navigate (equivalent to --step goto:<url>)")
       .option("--step <s>", "chrome journey step, repeatable & ordered: goto:<url> · click:<sel> · type:<sel>=<text> · waitfor:<sel> · wait:<ms> · newtab · eval:<js>  (sel: CSS or text=…)", collect, [])
       .option("--output <mp4>", "chrome: output path for the screen + trace-panel recording (default: a temp file)")
-      .option("--emit <url>", "stream the trace to a collector (POST /v1/traces) — the session appears live as it runs (default: env TRACE_COLLECTOR_URL)")
+      .option("--emit <url>", "stream the trace to a collector (POST /v1/traces) — the session appears live as it runs (default: env TRACE_COLLECTOR_URL, else a locally-running collector is auto-detected)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .option("--concise", "trim the --json envelope for token-tight agent reads: per hit, locals collapse to key names and the call stack keeps its top 2 frames (watched --expression values, location & timing kept). Re-run --detailed for everything.")
       .option("--detailed", "full --json envelope: every local's value and the complete call stack at each hit (the default)")

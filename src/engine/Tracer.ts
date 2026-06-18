@@ -8,6 +8,7 @@ import { BreakpointResolver } from "./BreakpointResolver.js";
 import { BINDING_NAME, HELPER_SOURCE, LogpointCapturer } from "./Logpoint.js";
 import { CurlTrigger, type CurlResult } from "./CurlTrigger.js";
 import { Screencaster } from "./Screencaster.js";
+import { CAPTURE_VIEWPORT } from "./Recorder.js";
 import { JourneyRunner, type StepResult, type TraceConfig } from "./JourneyRunner.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
@@ -156,7 +157,7 @@ export class Tracer {
   async traceChrome(options: TraceOptions): Promise<CaptureResult> {
     const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 100, urlMatch } = options;
     const parsedSteps = steps.map((step) => JourneyRunner.parseStep(step));
-    const screencaster = new Screencaster();
+    const screencaster = new Screencaster(CAPTURE_VIEWPORT);   // portrait-ish: fills the replay's left pane, no letterbox
     const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: options.onEvent };
     const runner = new JourneyRunner(port, screencaster, config);
     let stepResults: StepResult[] = [];
