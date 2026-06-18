@@ -77,6 +77,8 @@ export class TabTracer {
         const ev = await this.#capturer.capture(paused, "breakpoint", this.#ctx);
         this.#ctx.events.push(ev);
         this.#hits.push({ ev, t: Date.now() });
+        // Stream the cross-tab event list so far (same shape traceChrome returns) for live collector updates.
+        this.#cfg.onEvent?.(this.#hits.map((h) => h.ev));
       }
     } catch { /* keep the journey moving even if a capture fails */ }
     await this.#driver.send(Cdp.Debugger.resume).catch(() => {});

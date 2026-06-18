@@ -17,6 +17,7 @@ export interface SessionSummary {
   trigger: string | null;
   errors: number;
   warns: number;
+  running?: boolean;
 }
 
 export interface Loc {
@@ -96,6 +97,7 @@ export interface TraceMeta {
   at?: string;
   sessionId?: string;
   durationMs?: number;
+  running?: boolean;
 }
 
 export interface Diagnostic {

@@ -12,6 +12,7 @@ export interface Envelope {
   data: TraceData;
   diagnostics?: Diagnostic[];
   ok?: boolean;                             // default: true unless a diagnostic is an error
+  running?: boolean;                        // true → a partial, mid-run envelope (sets meta.running)
   startedAtMs?: number;                     // when given → meta.durationMs (from performance.now())
   sessionId?: string;
   args?: Record<string, unknown>;
@@ -44,6 +45,7 @@ export abstract class TraceCommand<Req = void, Res = Trace> extends CliCommand<R
         ...(e.sessionId ? { sessionId: e.sessionId } : {}),
         ...(e.args ? { args: e.args } : {}),
         ...(e.toolVersions ? { toolVersions: e.toolVersions } : {}),
+        ...(e.running ? { running: true } : {}),
         ...(e.startedAtMs !== undefined ? { durationMs: Math.round(performance.now() - e.startedAtMs) } : {}),
       }),
       target: e.target ?? null,

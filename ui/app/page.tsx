@@ -222,16 +222,18 @@ export default function Home() {
     selectedRef.current = selected;
   }, [selected]);
 
-  const loadDetail = useCallback(async (id: string) => {
+  // resetOpen=true only on an explicit click; the live SSE refresh of a running session keeps the user's
+  // expanded events open instead of collapsing them back to [0] on every incoming hit.
+  const loadDetail = useCallback(async (id: string, resetOpen = false) => {
     const env = await getSession(id).catch(() => null);
     setDetail(env);
-    setOpenEvents(new Set([0]));
+    if (resetOpen) setOpenEvents(new Set([0]));
   }, []);
 
   const select = useCallback(
     (id: string) => {
       setSelected(id);
-      void loadDetail(id);
+      void loadDetail(id, true);
     },
     [loadDetail],
   );
@@ -314,8 +316,9 @@ export default function Home() {
             >
               <div className="cmd">{s.command || "?"}</div>
               <div className="row2">
-                <span className={`status ${s.ok === false ? "err" : "ok"}`} />
+                <span className={`status ${s.running ? "run" : s.ok === false ? "err" : "ok"}`} />
                 <SrcBadge source={s.source} />
+                {s.running && <span className="runlbl">running</span>}
                 <span>{s.eventCount} ev</span>
                 {s.durationMs != null && <span>· {s.durationMs}ms</span>}
                 {s.errors > 0 && (
@@ -375,6 +378,7 @@ function Detail({
       <div className="dhead">
         <div className="cmd">
           {env.command} <SrcBadge source={t?.source} />
+          {m.running && <span className="runlbl">running…</span>}
         </div>
         <div className="meta">
           <span>{m.at ?? ""}</span>

@@ -84,7 +84,7 @@ export class DoctorCommand extends TraceCommand {
   render(trace: Trace): string {
     const tools = (trace.data.tools ?? []) as ToolStatus[];
     const pillars = [...new Set(tools.map((t) => t.pillar))];
-    const lines = ["trace doctor — backing tools"];
+    const lines = ["trace-cli doctor — backing tools"];
     for (const pillar of pillars) {
       lines.push(`\n  ${pillar}`);
       for (const t of tools.filter((x) => x.pillar === pillar)) {

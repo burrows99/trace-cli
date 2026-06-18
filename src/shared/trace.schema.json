@@ -22,6 +22,7 @@
         "sessionId": { "type": "string", "description": "groups every event of this run; the unit of cross-source correlation" },
         "args": { "type": "object" },
         "durationMs": { "type": ["number", "null"] },
+        "running": { "type": "boolean", "description": "true on partial envelopes emitted while a run is still in progress; absent once it finishes" },
         "toolVersions": {
           "type": "object",
           "description": "provenance of the backing OSS tool(s) used",

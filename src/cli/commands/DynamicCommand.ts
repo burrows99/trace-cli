@@ -24,9 +24,18 @@ export interface DynamicRequest extends TraceOptions {
   launch?: boolean;            // chrome: spawn a throwaway headless Chrome instead of attaching to `port`
   record?: boolean;            // chrome: render + upload a debug-replay video (on by default)
   recordOut?: string;          // explicit output path (else a temp file)
+  /**
+   * Live progress sink: called with a partial Trace as soon as the run starts (0 events) and again on every
+   * captured hit, so a collector can show the session the instant it begins and update it in real time —
+   * instead of only seeing the finished envelope. The final, complete Trace is the return value, not a callback.
+   */
+  onProgress?: (trace: Trace) => void;
 }
 
 export interface DynamicResult { trace: Trace; capture: CaptureResult; }
+
+/** Context shared by the running (partial) and final envelopes of one trace run. */
+interface RunCtx { sessionId: string; target: TargetKind; trigger: string | null; args: Record<string, unknown>; startedAtMs: number; }
 
 /**
  * DynamicCommand — orchestrates a breakpoint trace: pick the tracer by target, run it, normalize the
@@ -45,12 +54,23 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     const startedAtMs = this.started();
     const sessionId = req.sessionId ?? randomUUID();
     const isChrome = req.target === TargetKind.Chrome;
+    // Provisional trigger for the running envelopes (the final one carries the exact value from the capture):
+    // node → the curl; chrome → the first goto: URL, else a step count.
+    const gotoStep = req.steps?.find((s) => s.startsWith("goto:"))?.slice("goto:".length);
+    const trigger = isChrome ? (gotoStep ?? (req.steps?.length ? `${req.steps.length} steps` : null)) : (req.curl ?? null);
+    const ctx: RunCtx = { sessionId, target: req.target, trigger, args: req.args ?? {}, startedAtMs };
+
+    // The session exists in the collector the instant the run begins (0 events), then updates on every hit.
+    req.onProgress?.(this.#runningTrace([], ctx));
 
     // Chrome launch mode (`--chrome` with no port): spawn a throwaway headless Chrome to BE the trace target,
     // then tear it down. Attach mode (`--chrome <port>`) uses the running browser as-is.
     let launched: LaunchedChrome | undefined;
     try {
-      let opts: TraceOptions = { ...req, sessionId };
+      let opts: TraceOptions = {
+        ...req, sessionId,
+        ...(req.onProgress ? { onEvent: (events) => req.onProgress!(this.#runningTrace(events, ctx)) } : {}),
+      };
       if (isChrome && req.launch) { launched = await ChromeLauncher.launch(); opts = { ...opts, port: launched.port }; }
 
       // Both targets go through the engine the same way: one method, one CaptureResult. Chrome layers on the
@@ -62,6 +82,22 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     } finally {
       launched?.kill();
     }
+  }
+
+  /**
+   * A partial, mid-run envelope: the same shape as the finished trace but flagged `running` and carrying only
+   * the events captured so far (lineage/recording/diagnostics are computed once at the end in {@link #toTrace}).
+   */
+  #runningTrace(events: CaptureResult["events"], ctx: RunCtx): Trace {
+    return this.envelope({
+      command: `dynamic.${ctx.target}`,
+      data: new TraceData({ events }),
+      running: true,
+      sessionId: ctx.sessionId,
+      args: ctx.args,
+      startedAtMs: ctx.startedAtMs,
+      target: new TargetRef({ kind: ctx.target, source: "cdp", trigger: ctx.trigger }),
+    });
   }
 
   #toTrace(c: CaptureResult, ctx: { sessionId: string; args: Record<string, unknown>; startedAtMs: number }): Trace {

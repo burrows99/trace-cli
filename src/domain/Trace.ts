@@ -16,6 +16,8 @@ export class TraceMeta {
   @IsObject() args: Record<string, unknown>;
   @IsOptional() durationMs?: number;
   @IsObject() toolVersions: Record<string, string>;
+  /** True on the partial envelopes emitted *while a run is still in progress*; absent/false once it finishes. */
+  @IsOptional() @IsBoolean() running?: boolean;
 
   constructor(init: Partial<TraceMeta> = {}) {
     this.at = init.at ?? new Date().toISOString();

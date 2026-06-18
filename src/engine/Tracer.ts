@@ -55,6 +55,12 @@ export interface TraceOptions {
   titleMatch?: string;
   sessionId?: string;
   args?: Record<string, unknown>;
+  /**
+   * Progress hook, fired once per captured event with the full set of events captured *so far* (the same
+   * growing array, shared across tabs for Chrome). Lets the command layer stream partial traces to a
+   * collector while the run is still in flight, instead of only emitting the finished envelope.
+   */
+  onEvent?: (events: TraceEvent[]) => void;
 }
 
 /**
@@ -162,6 +168,7 @@ export class Tracer {
         const ev = await capturer.capture(paused, "breakpoint", ctx);
         result.events.push(ev);
         plan.onCapture?.(ev);
+        opts.onEvent?.(result.events);
         await capturer.runSteps(ctx, plan.stepTimeoutMs);
         await driver.send(Cdp.Debugger.resume).catch(() => {});
         if (plan.shouldStop(driver)) break;
@@ -223,12 +230,14 @@ export class Tracer {
     const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 30, urlMatch } = opts;
     const parsed = steps.map((s) => JourneyRunner.parseStep(s));
     const cast = new Screencaster();
-    const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits };
+    const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: opts.onEvent };
     const runner = new JourneyRunner(port, cast, config);
     let stepResults: StepResult[] = [];
     let fatal: string | undefined;
     try {
-      await runner.start(urlMatch);
+      // A journey that opens with a navigation needs the first tab instrumented, so breakpoints bind before
+      // that page's scripts run (on-mount code executes once and is otherwise missed). parseStep guarantees order.
+      await runner.start(urlMatch, parsed[0]?.action === "goto");
       stepResults = await runner.run(parsed);
     } catch (e: any) {
       fatal = String(e?.message ?? e);

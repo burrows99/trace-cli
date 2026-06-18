@@ -33,7 +33,7 @@ export class StepResult {
 }
 
 export interface TracedHit { ev: TraceEvent; t: number; }
-export interface TraceConfig { bps: ResolvedBp[]; root?: string; exprs: string[]; frames: number; maxHits: number; }
+export interface TraceConfig { bps: ResolvedBp[]; root?: string; exprs: string[]; frames: number; maxHits: number; onEvent?: (events: TraceEvent[]) => void; }
 
 /**
  * JourneyRunner — orchestrates a scripted UI journey across one or more page targets: discover (or open) a
@@ -108,8 +108,14 @@ export class JourneyRunner {
     await this.#cast.switch(d);
   }
 
-  /** Attach to an existing page (or one matching `urlMatch`) and begin recording it. */
-  async start(urlMatch?: string): Promise<void> {
+  /**
+   * Attach to an existing page (or one matching `urlMatch`) and begin recording it. `instrumentFirst` arms a
+   * `beforeScriptExecution` pause on this tab so breakpoints bind *before* the upcoming navigation's scripts
+   * run — set it when the journey opens with a `goto`, so first-run / on-mount code (e.g. a SPA computing a
+   * value during initial render) is caught instead of missed. Left false for attach-then-click flows, where
+   * an instrumentation pause could disturb the user-gesture timing the handler depends on.
+   */
+  async start(urlMatch?: string, instrumentFirst = false): Promise<void> {
     let pages = await this.#pages();
     if (!pages.length) {
       // The debug Chrome is up but tabless (a prior run / the impersonation popup closed its tabs). Open a
@@ -123,8 +129,9 @@ export class JourneyRunner {
     }
     const target = (urlMatch && pages.find((p) => (p.url || "").includes(urlMatch))) || pages[0];
     for (const p of pages) this.#known.add(p.id); // everything open now is "known"; only future tabs count as new
-    // launcher tab (e.g. Pulse): trace it, but bind-after-load (no instrumentation) — its handlers fire on click, not first run.
-    const d = await this.#connect(target, { trace: true, instrument: false });
+    // A leading `goto` navigates this tab, so instrument it to bind before first-run/on-mount code; an
+    // attach-then-click launcher tab (e.g. Pulse) stays uninstrumented — its handlers fire later, on click.
+    const d = await this.#connect(target, { trace: true, instrument: instrumentFirst });
     this.#t0 = Date.now();
     await this.#switchTo(d);
   }

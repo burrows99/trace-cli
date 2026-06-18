@@ -11,6 +11,8 @@ export interface SessionSummary {
   trigger: string | null;
   errors: number;
   warns: number;
+  /** true while the run is still in flight (emitted from a partial envelope); absent/false once finished. */
+  running: boolean;
 }
 
 export type EnvelopePlain = Record<string, any>;
@@ -46,5 +48,6 @@ export function summarize(env: EnvelopePlain): SessionSummary {
     trigger: env?.target?.trigger ?? null,
     errors: diags.filter((d) => d.level === "error").length,
     warns: diags.filter((d) => d.level === "warn").length,
+    running: env?.meta?.running === true,
   };
 }

@@ -26,7 +26,7 @@ import type { Trace } from "../domain/Trace.js";
 const log = logger.child({ component: "cli" });
 const int = (v: string) => parseInt(v, 10);
 const collect = (v: string, acc: string[]) => { acc.push(v); return acc; };
-const usage = (msg: string): never => { process.stderr.write(`trace: ${msg}\n`); process.exit(2); };
+const usage = (msg: string): never => { process.stderr.write(`trace-cli: ${msg}\n`); process.exit(2); };
 
 function pickTarget(o: any): { target: DynamicTargetKind; port: number; launch: boolean } {
   if (o.chrome != null) {
@@ -57,12 +57,14 @@ export class Cli {
   #dynamic = new DynamicCommand(new Tracer(), new S3ArtifactStore());
 
   async #runDynamic(o: any): Promise<void> {
+    if (o.chrome != null && o.node != null) usage("pick one target: --node or --chrome, not both");
     const { target, port, launch } = pickTarget(o);
     const isChrome = target === TargetKind.Chrome;
     if (!o.bp.length) usage("dynamic needs at least one --bp (file:line or file@substring)");
     // Chrome trigger = an ordered UI journey; --url is shorthand for a leading `goto:`. Node trigger = a curl.
     const steps: string[] = isChrome ? [...(o.url ? [`goto:${o.url}`] : []), ...o.step] : [];
     if (isChrome && !steps.length) usage("chrome target needs --url or at least one --step");
+    if (isChrome && o.curl) usage("--curl is a node-only trigger (chrome uses --url/--step)");
     if (!isChrome && o.step.length) usage("--step is a chrome-only trigger (node uses --curl)");
     if (!isChrome && !o.curl) usage(`${target} target needs --curl`);
 
@@ -79,17 +81,25 @@ export class Cli {
     // an `eval:` step an arbitrary script body.
     const safeStep = (s: string) => s.startsWith("type:") ? s.replace(/=.*/s, "=***") : s.startsWith("eval:") ? "eval:***" : s;
 
+    // --emit <url> (or TRACE_COLLECTOR_URL) → stream to the collector. Emits are serialized through one promise
+    // chain so a slow POST can't land a stale (smaller) envelope after a newer one; each ingest upserts the
+    // session row (keyed on sessionId) and re-broadcasts over SSE, so the dashboard updates live as it runs.
+    const collector = o.emit ?? process.env.TRACE_COLLECTOR_URL;
+    let chain: Promise<unknown> = Promise.resolve();
+    const pump = collector ? (env: unknown) => { chain = chain.then(() => Collector.emit(collector, env).catch(() => false)); } : undefined;
+
     const { trace } = await this.#dynamic.run({
       target, port, launch,
       breakpoints: o.bp, exprs: o.expr,
       steps, curl: o.curl,
+      root: o.root, maxHits: o.maxHits,
       recordOut: o.out,
-      args: { target, ...(launch ? { launch: true } : { port }), bp: o.bp, ...(steps.length ? { steps: steps.map(safeStep) } : {}), ...(o.curl ? { curl: o.curl } : {}) },
+      args: { target, ...(launch ? { launch: true } : { port }), bp: o.bp, ...(o.root ? { root: o.root } : {}), ...(o.maxHits ? { maxHits: o.maxHits } : {}), ...(steps.length ? { steps: steps.map(safeStep) } : {}), ...(o.curl ? { curl: o.curl } : {}) },
+      ...(pump ? { onProgress: (t: Trace) => pump(t.toJSON()) } : {}),
     });
 
     emit(trace, () => this.#dynamic.render(trace), o);
-    const collector = process.env.TRACE_COLLECTOR_URL;
-    if (collector) await Collector.emit(collector, trace.toJSON());
+    if (pump) { pump(trace.toJSON()); await chain; }   // final, complete envelope; then flush all pending emits
     process.exit(trace.hasErrors() ? 1 : 0);
   }
 
@@ -156,10 +166,13 @@ export class Cli {
       .option("--chrome [port]", "Chrome target: a running browser's --remote-debugging-port, or omit the port to launch a throwaway headless Chrome")
       .option("--bp <file:line>", "breakpoint, repeatable: file:line or file@substring", collect, [])
       .option("--expr <js>", "expression evaluated at every hit, repeatable", collect, [])
+      .option("--root <dir>", "project root for resolving --bp file paths and source maps (default: cwd) — needed when a file@substring breakpoint or a built app's sources live outside cwd")
+      .option("--max-hits <n>", "stop after this many breakpoint hits (default: node 25, chrome 30)", int)
       .option("--curl <cmd>", "trigger for node: a command run once breakpoints are set")
       .option("--url <url>", "chrome trigger shorthand: a page URL to navigate (equivalent to --step goto:<url>)")
       .option("--step <s>", "chrome journey step, repeatable & ordered: goto:<url> · click:<sel> · type:<sel>=<text> · waitfor:<sel> · wait:<ms> · newtab · eval:<js>  (sel: CSS or text=…)", collect, [])
       .option("--out <mp4>", "chrome: output path for the screen + trace-panel recording (default: a temp file)")
+      .option("--emit <url>", "stream the trace to a collector (POST /v1/traces) — the session appears live as it runs (default: env TRACE_COLLECTOR_URL)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((o) => this.#runDynamic(o));
 
@@ -233,11 +246,11 @@ export class Cli {
       .action((dir, o) => {
         try {
           const { src, dest } = new ExportSkillCommand().run({ dir, force: o.force });
-          process.stdout.write(`[trace] skill exported → ${dest}\n`);
+          process.stdout.write(`[trace-cli] skill exported → ${dest}\n`);
           log.info("skill exported", { src, dest });
           process.exit(0);
         } catch (e: any) {
-          process.stderr.write(`trace: ${e.message}\n`);
+          process.stderr.write(`trace-cli: ${e.message}\n`);
           process.exit(1);
         }
       });
@@ -254,7 +267,7 @@ export class Cli {
         if (["commander.help", "commander.helpDisplayed", "commander.version"].includes(err.code)) process.exit(0);
         process.exit(2);
       }
-      process.stderr.write(`trace: ${err?.message || err}\n`);
+      process.stderr.write(`trace-cli: ${err?.message || err}\n`);
       process.exit(1);
     }
   }
