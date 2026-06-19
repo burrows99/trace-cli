@@ -10,6 +10,12 @@
  * literals, so the two channels can never silently drift apart.
  */
 export const Code = {
+  // ── input contract ───────────────────────────────────────────────────────
+  /** the caller's input failed validation before any work began (a bad flag combination, a missing required
+   *  argument, an invalid journey step) — the structured counterpart of the CLI's exit-2 `usage()` error, so
+   *  non-CLI frontends (MCP/HTTP) can map an InputError to their own error shape instead of a process exit */
+  INPUT: "E_INPUT",
+
   // ── envelope contract ────────────────────────────────────────────────────
   /** the outgoing envelope failed its own JSON-Schema validation (a structural bug — should never ship) */
   SCHEMA: "E_SCHEMA",
