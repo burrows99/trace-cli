@@ -71,6 +71,64 @@ export class GraphView {
   }
 
   /**
+   * Text view of a repo map: a per-file outline. Each file is a section; its symbols nest by the `contains`
+   * relationship (class → method/field), in source order, and each symbol is annotated with its other edges —
+   * `→ calls`, `extends`, `implements`. The structural backbone is containment; calls/inheritance hang off it,
+   * so the output reads like a code outline with cross-references rather than a flat call tree.
+   */
+  static repoMap(graph: CodeGraph): string {
+    const nodesById = new Map<string, GraphNode>(graph.nodes.map((node) => [node.id, node]));
+    const containment = new Map<string, string[]>();  // parent id → child ids (the `contains` edges)
+    const relations = new Map<string, GraphEdge[]>();  // node id → its non-containment outgoing edges
+    for (const edge of graph.edges) {
+      if (edge.kind === "contains") (containment.get(edge.from) ?? containment.set(edge.from, []).get(edge.from)!).push(edge.to);
+      else (relations.get(edge.from) ?? relations.set(edge.from, []).get(edge.from)!).push(edge);
+    }
+
+    const kindSummary = Object.entries(graph.stats.edgeKinds ?? {}).map(([kind, count]) => `${kind}:${count}`).join(" · ");
+    const headerLines = [
+      `repo map — ${graph.root.split("/").pop() || graph.root}  via ${graph.provider}`,
+      `  ${graph.stats.files ?? 0} files · ${graph.stats.nodes} symbols · ${graph.stats.edges} edges` +
+        (kindSummary ? `  (${kindSummary})` : "") + (graph.stats.truncated ? " · truncated" : ""),
+      "",
+    ];
+
+    const relationSuffix = (id: string): string => {
+      const edgesOut = relations.get(id) ?? [];
+      if (!edgesOut.length) return "";
+      const byKind = new Map<string, string[]>();
+      for (const edge of edgesOut) {
+        const target = nodesById.get(edge.to);
+        const label = target ? (target.scope === "local" ? target.label : `${target.label} ⊗`) : edge.to;
+        (byKind.get(edge.kind) ?? byKind.set(edge.kind, []).get(edge.kind)!).push(label);
+      }
+      const verbFor: Record<string, string> = { calls: "→ calls", extends: "extends", implements: "implements", references: "← refs" };
+      const parts = [...byKind].map(([kind, labels]) => `${verbFor[kind] ?? kind} ${labels.slice(0, 6).join(", ")}${labels.length > 6 ? ", …" : ""}`);
+      return "   " + parts.join("  ·  ");
+    };
+
+    const childrenOf = (id: string): GraphNode[] =>
+      (containment.get(id) ?? []).map((childId) => nodesById.get(childId)).filter((node): node is GraphNode => !!node).sort((a, b) => a.location.line - b.location.line);
+
+    const lines: string[] = [];
+    const walk = (node: GraphNode, prefix: string, connector: string): void => {
+      const kindTag = node.kind && node.kind !== "file" && node.kind !== node.label ? `${node.kind} ` : "";
+      lines.push(`${prefix}${connector}${kindTag}${node.label}${relationSuffix(node.id)}`);
+      const children = childrenOf(node.id);
+      const childPrefix = prefix + (connector.startsWith("└") ? "   " : "│  ");
+      children.forEach((child, index) => walk(child, childPrefix, index === children.length - 1 ? "└─ " : "├─ "));
+    };
+
+    for (const file of graph.nodes.filter((node) => node.kind === "file").sort((a, b) => a.id.localeCompare(b.id))) {
+      lines.push(file.id);
+      const children = childrenOf(file.id);
+      children.forEach((child, index) => walk(child, "", index === children.length - 1 ? "└─ " : "├─ "));
+      lines.push("");
+    }
+    return headerLines.concat(lines).join("\n");
+  }
+
+  /**
    * HTML view: the call graph drawn as an actual node-and-edge diagram — a self-contained, zero-dependency
    * interactive page. Every `graph.nodes` entry is a circle, every `graph.edges` entry a directed arrow, laid
    * out by an inline force-directed simulation (SVG + vanilla JS). Pan (drag background), zoom (wheel), drag a
@@ -89,18 +147,21 @@ export class GraphView {
 
     // The graph IS the data: no traversal/dedup here — nodes and edges go to the force renderer verbatim. Cycles
     // are just edges that close a loop; a recursive call is a self-edge. Entry is accented, externals are amber.
+    const isRepo = graph.mode === "repo";
     const root = graph.nodes.find((node) => node.id === graph.entry);
-    const stats =
-      `${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
-      (graph.stats.external ? ` · ${graph.stats.external} external` : "") +
-      (graph.stats.truncated ? " · truncated" : "");
+    const repoName = graph.root.split("/").pop() || graph.root;
+    const stats = isRepo
+      ? `${graph.stats.files ?? 0} files · ${graph.stats.nodes} symbols · ${graph.stats.edges} edges` +
+        (graph.stats.external ? ` · ${graph.stats.external} external` : "") + (graph.stats.truncated ? " · truncated" : "")
+      : `${graph.stats.nodes} nodes · ${graph.stats.edges} edges · depth≤${graph.stats.maxDepth}` +
+        (graph.stats.external ? ` · ${graph.stats.external} external` : "") + (graph.stats.truncated ? " · truncated" : "");
     return GraphView.forceGraphDoc(
       {
-        title: `graph — ${root?.label ?? graph.entry}`,
-        h1: root?.label ?? graph.entry,
-        sub: `${root?.location.file ?? ""}${root?.location.line ? ":" + root.location.line : ""} · via ${graph.provider}`,
+        title: isRepo ? `repo map — ${repoName}` : `graph — ${root?.label ?? graph.entry}`,
+        h1: isRepo ? repoName : (root?.label ?? graph.entry),
+        sub: isRepo ? `${graph.stats.files ?? 0} files · via ${graph.provider}` : `${root?.location.file ?? ""}${root?.location.line ? ":" + root.location.line : ""} · via ${graph.provider}`,
         stats,
-        truncated: graph.stats.truncated ? "graph truncated — raise --depth for more, or pick a more specific entry" : undefined,
+        truncated: graph.stats.truncated ? (isRepo ? "repo map truncated — narrow with --entry <subdir>, or raise --max-files" : "graph truncated — raise --depth for more, or pick a more specific entry") : undefined,
       },
       {
         entry: graph.entry,

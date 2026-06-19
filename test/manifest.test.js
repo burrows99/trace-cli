@@ -18,7 +18,7 @@ test("manifest describes the tool and the whole command tree", () => {
   const names = m.command.commands.map((c) => c.name).sort();
   // Generated from the parser — every registered subcommand appears, including manifest itself. The four
   // static analyses (graph/deps/complexity/symbols) sit at the top level alongside the runtime `run` command.
-  assert.deepEqual(names, ["complexity", "deps", "doctor", "export-skill", "graph", "manifest", "run", "schema", "serve", "symbols"]);
+  assert.deepEqual(names, ["complexity", "deps", "doctor", "exports", "graph", "manifest", "run", "schema", "serve", "symbols"]);
 });
 
 test("manifest captures option metadata: flags, defaults, optional, negate", () => {

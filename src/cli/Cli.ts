@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import { ManifestCommand } from "./commands/ManifestCommand.js";
 import { SchemaCommand } from "./commands/SchemaCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
-import { ExportSkillCommand } from "./commands/ExportSkillCommand.js";
+import { ExportCommand } from "./commands/ExportCommand.js";
 import { InputManager } from "../io/InputManager.js";
 import { InputError } from "../io/InputError.js";
 import { ProcessingManager, EngineAbortError } from "../io/ProcessingManager.js";
@@ -127,12 +127,15 @@ export class Cli {
     // static analysis — code structure without running the app. Each command shells out to one analyzer and
     // emits the same Trace envelope as the runtime `run` command (call graph · deps · complexity · symbols).
     program.command("graph")
-      .description("call graph rooted at an entry → the flow tree for a function/route, via LSP call hierarchy")
-      .requiredOption("--entry <ref>", "where to start: file:line, file:line:column, or file@symbol (e.g. src/auth.service.ts:42:9 or src/auth.service.ts@exchangeToken)")
-      .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git above the entry)")
+      .description("code map via the language server. With --entry file:line / file@symbol: a rooted call graph (the flow tree out of one function). With a directory --entry, or no --entry: a whole-repo map — every symbol with containment (file→class→method), calls, and inheritance (extends/implements).")
+      .option("--entry <ref>", "rooted call walk: file:line, file:line:column, or file@symbol (e.g. src/auth.service.ts@exchangeToken). A directory — or omitting this — maps the whole repo instead.")
+      .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git; repo mode maps this directory)")
       .option("--server <cmd>", "override the LSP server (default: auto by file extension; bundled typescript-language-server for TS/JS, e.g. \"gopls\", \"pyright --stdio\")")
-      .option("--depth <n>", "max call depth expanded from the entry", parseIntArg, 6)
-      .option("--html [path]", "also write an interactive call-graph diagram — nodes & edges, force-directed (to a file if a path is given, else a temp file)")
+      .option("--depth <n>", "rooted mode: max call depth expanded from the entry", parseIntArg, 6)
+      .option("--max-files <n>", "repo mode: cap on source files scanned (default 800)", parseIntArg)
+      .option("--include-external", "keep edges to external symbols (node_modules / outside the root) as leaf nodes")
+      .option("--no-inheritance", "repo mode: skip extends/implements edges (don't query the server's type hierarchy)")
+      .option("--html [path]", "also write an interactive graph diagram — nodes & edges, force-directed (to a file if a path is given, else a temp file)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((options) => this.#runGraph(options));
 
@@ -188,15 +191,16 @@ export class Cli {
         process.exit(0);
       });
 
-    program.command("export-skill")
-      .description("copy the bundled `trace` skill into a project's .claude/skills/ so Claude Code picks it up")
-      .argument("[dir]", "target project root (default: current directory)")
-      .option("--force", "overwrite an existing .claude/skills/trace")
-      .action((dir, options) => {
+    program.command("exports")
+      .description("provision a project's export directory (.claude/skills/trace): copy the bundled `trace` skill so Claude Code picks it up, AND build interactive HTML maps of the project — the whole-repo LSP map (graph.html) and the module-import graph (deps.html). One command to get everything.")
+      .argument("[dir]", "target project root (default: current directory) — also the project the maps are built from")
+      .option("--force", "overwrite an existing export directory (.claude/skills/trace)")
+      .action(async (dir, options) => {
         try {
-          const { src: source, dest: destination } = new ExportSkillCommand().run({ dir, force: options.force });
+          const { dest: destination, maps } = await new ExportCommand().run({ dir, force: options.force });
           process.stdout.write(`[trace-cli] skill exported → ${destination}\n`);
-          log.info("skill exported", { src: source, dest: destination });
+          for (const map of maps) process.stdout.write(`[trace-cli] ${map.kind} map → ${map.path}${map.ok ? "" : "  (empty/degraded — see the page)"}\n`);
+          log.info("export complete", { dest: destination, maps: maps.map((m) => ({ kind: m.kind, ok: m.ok })) });
           process.exit(0);
         } catch (error: any) {
           process.stderr.write(`trace-cli: ${error.message}\n`);

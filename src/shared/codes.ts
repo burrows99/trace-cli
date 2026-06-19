@@ -42,6 +42,8 @@ export const Code = {
   CODEGRAPH_FAILED: "CODEGRAPH_FAILED",
   /** the call graph hit the depth/size cap and was truncated */
   GRAPH_TRUNCATED: "GRAPH_TRUNCATED",
+  /** the map is missing a relationship the language server can't provide (e.g. no type-hierarchy support) */
+  GRAPH_DEGRADED: "GRAPH_DEGRADED",
   /** the language server could not be spawned or connected */
   LSP: "LSP_SPAWN_FAILED",
   /** module-import analysis (madge) failed */
