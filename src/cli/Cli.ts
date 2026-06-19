@@ -15,7 +15,7 @@ import { ManifestCommand } from "./commands/ManifestCommand.js";
 import { SchemaCommand } from "./commands/SchemaCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
 import { Tracer } from "../engine/Tracer.js";
-import { Collector } from "../collector/Collector.js";
+import { Collector, type EmitResult } from "../collector/Collector.js";
 import { S3ArtifactStore } from "../storage/S3ArtifactStore.js";
 import { VERSION } from "../shared/version.js";
 import { TargetKind } from "../domain/Target.js";
@@ -120,7 +120,10 @@ export class Cli {
     // dashboard updates live as it runs.
     const collector = await Collector.resolve(options.emit);
     let emitChain: Promise<unknown> = Promise.resolve();
-    const emitToCollector = collector ? (envelope: unknown) => { emitChain = emitChain.then(() => Collector.emit(collector, envelope).catch(() => false)); } : undefined;
+    const emitFailures: EmitResult[] = [];
+    const emitToCollector = collector
+      ? (envelope: unknown) => { emitChain = emitChain.then(async () => { const result = await Collector.emit(collector, envelope); if (!result.ok) emitFailures.push(result); }); }
+      : undefined;
 
     const { trace } = await this.#dynamic.run({
       target, port, launch,
@@ -132,8 +135,19 @@ export class Cli {
       ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
     });
 
+    // Flush the final (complete) envelope and all pending emits BEFORE rendering, so a rejected emit
+    // (a 400 schema error, a 503 dead store) becomes a visible diagnostic in the printed/--json envelope
+    // instead of vanishing into an info log — the gap that sent a debugging loop chasing the wrong cause.
+    if (emitToCollector) {
+      emitToCollector(trace.toJSON());
+      await emitChain;
+      if (emitFailures.length) {
+        const last = emitFailures[emitFailures.length - 1];
+        const reason = last.status ? `HTTP ${last.status}${last.body ? ` — ${last.body.slice(0, 200)}` : ""}` : (last.error ?? "unknown error");
+        trace.diagnostics.push(Diagnostic.warn(Code.EMIT, `collector ${collector} rejected ${emitFailures.length} emit(s): ${reason}`));
+      }
+    }
     emit(trace, () => this.#dynamic.render(trace), options);
-    if (emitToCollector) { emitToCollector(trace.toJSON()); await emitChain; }   // final, complete envelope; then flush all pending emits
     process.exit(trace.hasErrors() ? 1 : 0);
   }
 
@@ -233,7 +247,7 @@ export class Cli {
       .option("--output <mp4>", "chrome: output path for the screen + trace-panel recording (default: a temp file)")
       .option("--emit <url>", "stream the trace to a collector (POST /v1/traces) — the session appears live as it runs (default: env TRACE_COLLECTOR_URL, else a locally-running collector is auto-detected)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
-      .option("--concise", "trim the --json envelope for token-tight agent reads: per hit, locals collapse to key names and the call stack keeps its top 2 frames (watched --expression values, location & timing kept). Re-run --detailed for everything.")
+      .option("--concise", "trim the PRINTED --json envelope (stdout/file) for token-tight agent reads: per hit, locals collapse to key names and the call stack keeps its top 2 frames (watched --expression values, location & timing kept). Does NOT affect --emit — the collector always receives the full envelope. Re-run --detailed for everything.")
       .option("--detailed", "full --json envelope: every local's value and the complete call stack at each hit (the default)")
       .action((options) => this.#runDynamic(options));
 

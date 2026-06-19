@@ -110,6 +110,13 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     for (const breakpoint of capture.breakpoints.filter((breakpoint) => !breakpoint.bound)) {
       diagnostics.push(Diagnostic.warn(Code.BP_UNBOUND, `${breakpoint.file}:${breakpoint.line} did not bind${breakpoint.note ? " — " + breakpoint.note : ""}`));
     }
+    // Bound-but-unhit: the breakpoint attached but no event fired. Without this an agent reading `--json`
+    // sees only `bound:true, events:[]` with no diagnostic and has to guess "no trigger" vs "wrong line" —
+    // exactly the fork that stalls a debugging loop. Mirror the human renderer's "no breakpoints hit" line.
+    const boundCount = capture.breakpoints.filter((breakpoint) => breakpoint.bound).length;
+    if (boundCount > 0 && capture.events.length === 0) {
+      diagnostics.push(Diagnostic.warn(Code.BP_BOUND_UNHIT, `${boundCount} breakpoint(s) bound but never hit — the trigger may not have exercised this path (wrong route/branch, or the trigger didn't run).`));
+    }
     const lineage = LineageAnalyzer.compute(capture.events);
     const data = new TraceData({
       breakpoints: capture.breakpoints,
