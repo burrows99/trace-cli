@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { LspCodeGraphProvider } from "../dist/codegraph/LspCodeGraphProvider.js";
 import { createCodeGraphProvider, CODEGRAPH_PROVIDERS } from "../dist/codegraph/createCodeGraphProvider.js";
 import { GraphCommand } from "../dist/cli/commands/GraphCommand.js";
+import { Analyzer } from "../dist/analysis/Analyzer.js";
+import { GraphAnalyzer } from "../dist/analysis/GraphAnalyzer.js";
 
 const ROOT = fileURLToPath(new URL("./fixtures/codegraph", import.meta.url));
 const build = (entry, extra) => new LspCodeGraphProvider().callGraph(entry, { root: ROOT, maxDepth: 10, includeExternal: false, maxNodes: 500, ...extra });
@@ -72,4 +74,16 @@ test("a non-existent entry fails into an error envelope, not a throw", async () 
   });
   assert.equal(trace.ok, false);
   assert.ok(trace.diagnostics.some((d) => d.code === "CODEGRAPH_FAILED"));
+});
+
+test("GraphAnalyzer is an Analyzer that delegates the call-hierarchy walk to its provider", async () => {
+  const analyzer = new GraphAnalyzer(); // defaults to the lsp provider via the factory
+  assert.ok(analyzer instanceof Analyzer, "GraphAnalyzer extends the shared Analyzer base");
+  assert.equal(analyzer.name, "lsp", "name mirrors the backing provider — drives the `graph.<name>` command");
+  const g = await analyzer.analyze({
+    entry: { file: "sample.ts", symbol: "entry" },
+    options: { root: ROOT, maxDepth: 10, includeExternal: false, maxNodes: 500 },
+  });
+  assert.equal(g.provider, "lsp");
+  assert.deepEqual(g.nodes.map((n) => n.label).sort(), ["alpha", "beta", "entry", "gamma", "helperFn", "recur"]);
 });

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { Trace, TraceMeta, TraceData, TraceEvent, Breakpoint, Diagnostic, SourceLocation } from "../dist/domain/index.js";
+import { Analyzer } from "../dist/analysis/Analyzer.js";
 import { LineageAnalyzer } from "../dist/analysis/LineageAnalyzer.js";
 import { BreakpointResolver } from "../dist/engine/BreakpointResolver.js";
 import { SourceMaps } from "../dist/engine/SourceMaps.js";
@@ -56,7 +57,10 @@ test("Trace.fromPlain rehydrates the full object graph to class instances", () =
 const ev = (sequence, exprs, locals) => new TraceEvent({ sequence, time: sequence * 10, kind: "breakpoint", attributes: { exprs, locals } });
 
 test("LineageAnalyzer tracks a value mutating across hits (expr wins over local)", () => {
-  const lin = LineageAnalyzer.compute([ev(1, { total: 0 }, { total: 0, i: 0 }), ev(2, { total: 9.99 }, { total: 9.99, i: 1 }), ev(3, { total: 14.49 }, { total: 14.49, i: 2 })]);
+  const analyzer = new LineageAnalyzer();
+  assert.ok(analyzer instanceof Analyzer, "LineageAnalyzer extends the shared Analyzer base");
+  assert.equal(analyzer.name, "lineage");
+  const lin = analyzer.analyze([ev(1, { total: 0 }, { total: 0, i: 0 }), ev(2, { total: 9.99 }, { total: 9.99, i: 1 }), ev(3, { total: 14.49 }, { total: 14.49, i: 2 })]);
   const total = lin.find((t) => t.name === "total");
   assert.equal(total.kind, "expr");
   assert.equal(total.occurrences, 3);
@@ -65,8 +69,8 @@ test("LineageAnalyzer tracks a value mutating across hits (expr wins over local)
 });
 
 test("LineageAnalyzer drops values that never change / single-hit", () => {
-  assert.equal(LineageAnalyzer.compute([ev(1, { c: "X" }), ev(2, { c: "X" })]).length, 0);
-  assert.equal(LineageAnalyzer.compute([ev(1, { total: 5 }, { total: 5 })]).length, 0);
+  assert.equal(new LineageAnalyzer().analyze([ev(1, { c: "X" }), ev(2, { c: "X" })]).length, 0);
+  assert.equal(new LineageAnalyzer().analyze([ev(1, { total: 5 }, { total: 5 })]).length, 0);
 });
 
 test("BreakpointResolver.parseSpec splits file:line and file@substring", () => {

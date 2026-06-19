@@ -7,6 +7,7 @@ import { Code } from "../../shared/codes.js";
 import { findProjectRoot } from "../../shared/projectRoot.js";
 import { createCodeGraphProvider } from "../../codegraph/createCodeGraphProvider.js";
 import type { CodeGraph, EntryReference } from "../../codegraph/CodeGraphProvider.js";
+import { GraphAnalyzer } from "../../analysis/GraphAnalyzer.js";
 import { TraceCommand } from "./TraceCommand.js";
 import { GraphView } from "./GraphView.js";
 
@@ -25,16 +26,16 @@ export interface GraphRequest {
 }
 
 /**
- * GraphCommand — orchestrates a static call-graph build: pick the provider (factory), build the outgoing-call
- * graph rooted at the entry, and normalize it into one Trace envelope (`data.graph`). The provider is the
- * injected collaborator (Dependency Inversion); this class owns the use-case and the envelope, not the analysis.
- * A resolution/analysis failure becomes an error diagnostic on a still-well-formed envelope, matching how the
- * run command surfaces engine failures — an agent always gets back a Trace.
+ * GraphCommand — orchestrates a static call-graph build: pick the analyzer (a {@link GraphAnalyzer} over the
+ * chosen provider), build the outgoing-call graph rooted at the entry, and normalize it into one Trace envelope
+ * (`data.graph`). The analyzer is the injected collaborator (Dependency Inversion); this class owns the use-case
+ * and the envelope, not the analysis. A resolution/analysis failure becomes an error diagnostic on a still-
+ * well-formed envelope, matching how the run command surfaces engine failures — an agent always gets a Trace.
  */
 export class GraphCommand extends TraceCommand<GraphRequest> {
   async run(request: GraphRequest): Promise<Trace> {
     const startedAtMs = this.started();
-    const provider = createCodeGraphProvider(request.provider);
+    const analyzer = new GraphAnalyzer(createCodeGraphProvider(request.provider));
     const diagnostics: Diagnostic[] = [];
     let data = new TraceData({});
 
@@ -44,12 +45,15 @@ export class GraphCommand extends TraceCommand<GraphRequest> {
       const baseDirectory = request.root ? resolve(request.root) : process.cwd();
       const entryFile = isAbsolute(request.entry.file) ? request.entry.file : resolve(baseDirectory, request.entry.file);
       const root = request.root ? resolve(request.root) : findProjectRoot(entryFile);
-      const graph = await provider.callGraph({ ...request.entry, file: entryFile }, {
-        root,
-        maxDepth: request.maxDepth,
-        includeExternal: request.includeExternal ?? false,
-        maxNodes: request.maxNodes ?? MAX_NODES,
-        server: request.server,
+      const graph = await analyzer.analyze({
+        entry: { ...request.entry, file: entryFile },
+        options: {
+          root,
+          maxDepth: request.maxDepth,
+          includeExternal: request.includeExternal ?? false,
+          maxNodes: request.maxNodes ?? MAX_NODES,
+          server: request.server,
+        },
       });
       data = new TraceData({ graph });
       if (graph.stats.truncated) {
@@ -57,12 +61,12 @@ export class GraphCommand extends TraceCommand<GraphRequest> {
       }
     } catch (error: any) {
       diagnostics.push(Diagnostic.error(Code.CODEGRAPH_FAILED, String(error?.message ?? error).split("\n")[0]));
-      log.error("call graph failed", { code: Code.CODEGRAPH_FAILED, provider: provider.name, err: error });
+      log.error("call graph failed", { code: Code.CODEGRAPH_FAILED, provider: analyzer.name, err: error });
     }
 
     // `ok` derives from the diagnostics: a CODEGRAPH_FAILED error flips it false, GRAPH_TRUNCATED (warn) doesn't.
     return this.envelope({
-      command: `graph.${provider.name}`,
+      command: `graph.${analyzer.name}`,
       data,
       diagnostics,
       args: request.args ?? {},
