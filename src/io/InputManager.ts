@@ -1,5 +1,8 @@
+import { isAbsolute, resolve } from "node:path";
+
 import { TargetKind } from "../domain/Target.js";
 import { EntryReference } from "../codegraph/CodeGraphProvider.js";
+import { isDirectory } from "../codegraph/sourceFiles.js";
 import { DEFAULT_NODE_PORT } from "../shared/defaults.js";
 import { InputValidator } from "./InputValidator.js";
 import type {
@@ -58,16 +61,40 @@ export class InputManager {
     return { request, emit: raw.emit };
   }
 
-  /** Validate + normalize a `graph` invocation: an entry anchor (file:line[:column] or file@symbol) + depth. */
+  /**
+   * Validate + normalize a `graph` invocation. Two modes: a rooted call walk when `--entry` carries an anchor
+   * (file:line[:column] or file@symbol), or a whole-directory **repo map** when `--entry` is omitted or names a
+   * directory. The rooted path keeps the strict entry-anchor validation; the repo path needs no anchor.
+   */
   acceptGraph(raw: RawGraphInput): GraphRequest {
-    const entry = EntryReference.parse(raw.entry);
-    this.#validator.validateGraph({ file: entry.file, line: entry.line, column: entry.column, symbol: entry.symbol, depth: raw.depth });
+    const entryString = raw.entry?.trim();
+    const entry = entryString ? EntryReference.parse(entryString) : undefined;
+    const baseDirectory = resolve(raw.root ?? process.cwd());
+    const absoluteEntry = entry ? (isAbsolute(entry.file) ? entry.file : resolve(baseDirectory, entry.file)) : undefined;
+    // Repo map: no --entry, or a --entry that is a directory (no line/symbol anchor and it resolves to a dir).
+    const repo = !entry || (entry.line == null && entry.symbol == null && isDirectory(absoluteEntry!));
+
+    if (repo) {
+      return {
+        repo: true,
+        root: entry ? absoluteEntry : raw.root, // a directory --entry IS the root to map; else --root/cwd (GraphCommand detects)
+        maxDepth: raw.depth,
+        maxFiles: raw.maxFiles,
+        includeExternal: raw.includeExternal,
+        inheritance: raw.inheritance,
+        server: raw.server,
+        args: { ...(entryString ? { entry: entryString } : {}), ...(raw.root ? { root: raw.root } : {}), ...(raw.server ? { server: raw.server } : {}), ...(raw.maxFiles ? { maxFiles: raw.maxFiles } : {}) },
+      };
+    }
+
+    this.#validator.validateGraph({ file: entry!.file, line: entry!.line, column: entry!.column, symbol: entry!.symbol, depth: raw.depth });
     return {
       entry,
       root: raw.root, // optional — GraphCommand auto-detects the project root from the entry when absent
       maxDepth: raw.depth,
+      includeExternal: raw.includeExternal,
       server: raw.server,
-      args: { entry: raw.entry, ...(raw.root ? { root: raw.root } : {}), ...(raw.server ? { server: raw.server } : {}), depth: raw.depth },
+      args: { entry: entryString, ...(raw.root ? { root: raw.root } : {}), ...(raw.server ? { server: raw.server } : {}), depth: raw.depth },
     };
   }
 

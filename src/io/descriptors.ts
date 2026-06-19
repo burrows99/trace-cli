@@ -35,10 +35,13 @@ export interface RawRunInput {
 }
 
 export interface RawGraphInput {
-  entry: string;
+  entry?: string;            // file:line / file@symbol → rooted call walk; a dir or omitted → repo map
   root?: string;
   server?: string;
   depth: number;
+  maxFiles?: number;         // repo map: cap on files scanned
+  includeExternal?: boolean; // repo map: keep edges to node_modules / outside-root symbols
+  inheritance?: boolean;     // repo map: commander --no-inheritance sets this false (skip type hierarchy)
   html?: string | boolean;
   json?: string | boolean;
   concise?: boolean;

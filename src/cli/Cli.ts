@@ -127,12 +127,15 @@ export class Cli {
     // static analysis — code structure without running the app. Each command shells out to one analyzer and
     // emits the same Trace envelope as the runtime `run` command (call graph · deps · complexity · symbols).
     program.command("graph")
-      .description("call graph rooted at an entry → the flow tree for a function/route, via LSP call hierarchy")
-      .requiredOption("--entry <ref>", "where to start: file:line, file:line:column, or file@symbol (e.g. src/auth.service.ts:42:9 or src/auth.service.ts@exchangeToken)")
-      .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git above the entry)")
+      .description("code map via the language server. With --entry file:line / file@symbol: a rooted call graph (the flow tree out of one function). With a directory --entry, or no --entry: a whole-repo map — every symbol with containment (file→class→method), calls, and inheritance (extends/implements).")
+      .option("--entry <ref>", "rooted call walk: file:line, file:line:column, or file@symbol (e.g. src/auth.service.ts@exchangeToken). A directory — or omitting this — maps the whole repo instead.")
+      .option("--root <dir>", "project root / LSP workspace (default: auto — nearest tsconfig/package.json/.git; repo mode maps this directory)")
       .option("--server <cmd>", "override the LSP server (default: auto by file extension; bundled typescript-language-server for TS/JS, e.g. \"gopls\", \"pyright --stdio\")")
-      .option("--depth <n>", "max call depth expanded from the entry", parseIntArg, 6)
-      .option("--html [path]", "also write an interactive call-graph diagram — nodes & edges, force-directed (to a file if a path is given, else a temp file)")
+      .option("--depth <n>", "rooted mode: max call depth expanded from the entry", parseIntArg, 6)
+      .option("--max-files <n>", "repo mode: cap on source files scanned (default 800)", parseIntArg)
+      .option("--include-external", "keep edges to external symbols (node_modules / outside the root) as leaf nodes")
+      .option("--no-inheritance", "repo mode: skip extends/implements edges (don't query the server's type hierarchy)")
+      .option("--html [path]", "also write an interactive graph diagram — nodes & edges, force-directed (to a file if a path is given, else a temp file)")
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .action((options) => this.#runGraph(options));
 
