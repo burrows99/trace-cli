@@ -36,6 +36,7 @@ async function readCappedText(response: Response, maxChars: number): Promise<str
       if (done) break;
       text += decoder.decode(value, { stream: true });
     }
+    text += decoder.decode();   // flush bytes buffered from a multi-byte char split across the last chunk boundary
   } catch {
     // mid-read failure (connection dropped while reading the error body) — surface whatever arrived
   } finally {
