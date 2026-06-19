@@ -90,9 +90,9 @@ Any trace **auto-streams to a collector running locally** — no flag needed. Ov
 Docker Compose bundles the dashboard, Postgres, and a mock S3 for one-command local setup:
 
 ```bash
-docker compose up --build                # dashboard :4747 · Postgres :5432 · S3 :9000
+docker compose up --build                # dashboard :14747 · Postgres :65432 · S3 :19000 (console :19001)
 # then run the CLI natively from where your target is reachable; it auto-detects the collector
-export S3_ENDPOINT=http://localhost:9000
+export S3_ENDPOINT=http://localhost:19000
 trace-cli run --chrome 9222 --url http://localhost:3000 --breakpoint src/App.tsx:9
 ```
 

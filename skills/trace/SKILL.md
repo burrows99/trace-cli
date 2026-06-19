@@ -34,3 +34,13 @@ trace-cli doctor            # which backing tools are installed (node, chrome, f
 ```
 
 - Start with `trace-cli manifest` (to reason over the options programmatically) or `trace-cli <command> --help` (for a quick look). Whatever you need to know about executing `trace-cli`, get it from there — not from this file.
+
+## Reading the result — don't mistake an empty trace for a clean pass
+
+The envelope **is** the result; read it, don't just check the exit code. Three fields decide whether a run did what you asked (full contract: `trace-cli schema`):
+
+- **`ok`** — `false` when a diagnostic is an error (engine aborted, a failed journey step, a malformed envelope); the exit code mirrors it.
+- **`diagnostics[]`** — each carries a stable `code` (the same vocabulary the stderr logs use, so you can join the two). **`warn`-level codes do *not* flip `ok`** — so a run can be `ok:true` and still have observed or recorded nothing: a breakpoint that *bound but never hit*, a Chrome run with no frames, or a recording/upload that failed. **Read `diagnostics` before concluding a trace succeeded.**
+- **`meta.running`** — `true` marks a *partial*, mid-run envelope (streamed to the collector while the run is in flight); it is absent on the finished trace. A dashboard session stuck on `running` means the run never finished (it aborted, or the final envelope never arrived) — not that it's still working.
+
+Rule of thumb: `ok:true` **+ `events: []` + a `warn` diagnostic** = the trace ran fine but saw nothing (wrong line, branch not taken, or the trigger never fired) — re-aim the breakpoint/trigger, don't report success.
