@@ -9,7 +9,7 @@ import { Code } from "../shared/codes.js";
  *   • HTTP → `400 { error, code, problems }`.
  *
  * `message` is the single human line (the exact string the CLI prints). `problems` carries the individual
- * validation lines when the error aggregates several (a failed `DynamicInput.validate()` / `validateSteps()`);
+ * validation lines when the error aggregates several (a failed `RunInput.validate()` / `validateSteps()`);
  * these are already redaction-safe (step problems are labelled by index + action, never the raw typed value).
  */
 export class InputError extends Error {

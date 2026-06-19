@@ -381,7 +381,7 @@ export default function Home() {
             <div className="empty">
               Select a session, or run
               <br />
-              <code>trace dynamic … --emit http://localhost:4000</code>
+              <code>trace run … --emit http://localhost:4000</code>
             </div>
           ) : (
             <Detail

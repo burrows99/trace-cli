@@ -12,5 +12,5 @@ export { OutputManager, condense } from "./OutputManager.js";
 export { OutputValidator } from "./OutputValidator.js";
 export type {
   RawRunInput, RawGraphInput, RawDepsInput, RawComplexityInput, RawSymbolsInput,
-  NormalizedRun, RunRequest, ProcessingResult, OutputOptions, OutputResult, FileOutput, OutputLog,
+  NormalizedRun, NormalizedRunRequest, ProcessingResult, OutputOptions, OutputResult, FileOutput, OutputLog,
 } from "./descriptors.js";

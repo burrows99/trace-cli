@@ -160,7 +160,7 @@ export class Tracer {
     const parsedSteps = steps.map((step) => JourneyRunner.parseStep(step));
     const screencaster = new Screencaster(CAPTURE_VIEWPORT);   // portrait-ish: fills the replay's left pane, no letterbox
     const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: options.onEvent };
-    // Wrap the running browser (DynamicCommand already launched/attached it) as a session so target discovery
+    // Wrap the running browser (RunCommand already launched/attached it) as a session so target discovery
     // goes through the bridge, not raw CdpDriver calls.
     const runner = new JourneyRunner(ChromeLauncher.attach(port), screencaster, config);
     let stepResults: StepResult[] = [];

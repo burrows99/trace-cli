@@ -7,7 +7,7 @@
 #   open http://localhost:4747
 #
 # Then point traces at it from the host:
-#   trace dynamic --node 9229 --bp app.js:42 --curl '…' --emit http://localhost:4747
+#   trace run --node 9229 --bp app.js:42 --curl '…' --emit http://localhost:4747
 #
 # The image is the full CLI (ENTRYPOINT `trace`); CMD defaults to `serve`, which launches the standalone
 # dashboard. Override to run other subcommands, e.g.  docker run trace-cli doctor.

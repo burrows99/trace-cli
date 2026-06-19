@@ -1,11 +1,11 @@
-// DynamicCommand diagnostics: a trace run must make its failures legible in the envelope (not just stderr),
+// RunCommand diagnostics: a trace run must make its failures legible in the envelope (not just stderr),
 // and a thrown run must emit a TERMINAL envelope so the dashboard's "running" session resolves instead of
 // hanging forever. Injects a fake tracer so we exercise the envelope/diagnostic logic without a real CDP target.
 import "reflect-metadata";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DynamicCommand } from "../dist/cli/commands/DynamicCommand.js";
+import { RunCommand } from "../dist/cli/commands/RunCommand.js";
 import { TargetKind } from "../dist/domain/Target.js";
 
 const fakeTracer = (behavior) => ({
@@ -17,7 +17,7 @@ const nodeCapture = (over = {}) => ({ target: TargetKind.Node, trigger: "curl lo
 
 test("a thrown run emits a TERMINAL envelope (running cleared, ENGINE_FATAL) so the dashboard resolves", async () => {
   const seen = [];
-  const cmd = new DynamicCommand(fakeTracer(() => { throw new Error("attach failed: ECONNREFUSED"); }));
+  const cmd = new RunCommand(fakeTracer(() => { throw new Error("attach failed: ECONNREFUSED"); }));
 
   await assert.rejects(
     cmd.run({ target: TargetKind.Node, port: 9229, onProgress: (t) => seen.push(t) }),
@@ -37,14 +37,14 @@ test("a thrown run emits a TERMINAL envelope (running cleared, ENGINE_FATAL) so 
 });
 
 test("a captured fatal (no throw) yields ok:false + an ENGINE_FATAL diagnostic in the envelope", async () => {
-  const cmd = new DynamicCommand(fakeTracer(() => nodeCapture({ fatal: "debugger disconnected" })));
+  const cmd = new RunCommand(fakeTracer(() => nodeCapture({ fatal: "debugger disconnected" })));
   const { trace } = await cmd.run({ target: TargetKind.Node, port: 9229 });
   assert.equal(trace.ok, false);
   assert.ok(trace.diagnostics.some((d) => d.code === "ENGINE_FATAL"));
 });
 
 test("a clean empty node trace stays ok:true and not running (no false alarms)", async () => {
-  const cmd = new DynamicCommand(fakeTracer(() => nodeCapture()));
+  const cmd = new RunCommand(fakeTracer(() => nodeCapture()));
   const { trace } = await cmd.run({ target: TargetKind.Node, port: 9229 });
   assert.equal(trace.ok, true);
   assert.equal(trace.meta.running, undefined, "the final envelope is not flagged running");

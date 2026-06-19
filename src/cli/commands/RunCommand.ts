@@ -17,12 +17,12 @@ import { logger } from "../../shared/logger.js";
 import { Code } from "../../shared/codes.js";
 import { TraceCommand } from "./TraceCommand.js";
 
-const log = logger.child({ component: "dynamic" });
+const log = logger.child({ component: "run" });
 
-export type DynamicTargetKind = TargetKind;
+export type RunTargetKind = TargetKind;
 
-export interface DynamicRequest extends TraceOptions {
-  target: DynamicTargetKind;
+export interface RunRequest extends TraceOptions {
+  target: RunTargetKind;
   launch?: boolean;            // chrome: spawn a throwaway headless Chrome instead of attaching to `port`
   profileDir?: string;         // chrome: launch on a persistent --user-data-dir (a real, logged-in profile)
   headed?: boolean;            // chrome: launch the browser visibly instead of headless
@@ -35,17 +35,17 @@ export interface DynamicRequest extends TraceOptions {
   onProgress?: (trace: Trace) => void;
 }
 
-export interface DynamicResult { trace: Trace; capture: CaptureResult; }
+export interface RunResult { trace: Trace; capture: CaptureResult; }
 
 /** Context shared by the running (partial) and final envelopes of one trace run. */
 interface RunCtx { sessionId: string; target: TargetKind; trigger: string | null; args: Record<string, unknown>; startedAtMs: number; }
 
 /**
- * DynamicCommand — orchestrates a breakpoint trace: pick the tracer by target, run it, normalize the
+ * RunCommand — orchestrates a breakpoint trace: pick the tracer by target, run it, normalize the
  * capture into a Trace (lineage + diagnostics), and (for Chrome) record + upload the replay. Collaborators
  * are injected (Tracer, ArtifactStore) — Dependency Inversion; this class owns the use-case, not the IO.
  */
-export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> {
+export class RunCommand extends TraceCommand<RunRequest, RunResult> {
   constructor(
     private readonly tracer: Tracer = new Tracer(),
     private readonly artifacts?: ArtifactStore,
@@ -53,7 +53,7 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     super();
   }
 
-  async run(request: DynamicRequest): Promise<DynamicResult> {
+  async run(request: RunRequest): Promise<RunResult> {
     const startedAtMs = this.started();
     const sessionId = request.sessionId ?? randomUUID();
     const isChrome = request.target === TargetKind.Chrome;
@@ -172,7 +172,7 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     });
   }
 
-  /** Human view of a dynamic trace: the breakpoint/timeline render plus the lineage panel. */
+  /** Human view of a breakpoint trace: the breakpoint/timeline render plus the lineage panel. */
   render(trace: Trace): string {
     return Renderer.render(trace) + Renderer.renderLineage(trace.data.lineage);
   }

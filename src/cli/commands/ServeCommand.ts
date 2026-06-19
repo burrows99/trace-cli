@@ -39,7 +39,7 @@ export class ServeCommand extends CliCommand<ServeOptions, void> {
     // default); on any other --port a run must point at this URL explicitly, so don't make the user guess it.
     const collectorUrl = `http://localhost:${port}`;
     log.info("starting dashboard", { url: collectorUrl, host });
-    log.info("stream traces here", { hint: `trace dynamic … --emit ${collectorUrl}   (or: export TRACE_COLLECTOR_URL=${collectorUrl})` });
+    log.info("stream traces here", { hint: `trace run … --emit ${collectorUrl}   (or: export TRACE_COLLECTOR_URL=${collectorUrl})` });
     const child = spawn(process.execPath, [SERVER_ENTRY], {
       stdio: "inherit",
       env: { ...process.env, PORT: String(port), HOSTNAME: host, DATABASE_URL: databaseUrl },

@@ -1,7 +1,7 @@
 import { Tracer } from "../engine/Tracer.js";
 import { S3ArtifactStore } from "../storage/S3ArtifactStore.js";
 import { Collector, type EmitResult } from "../collector/Collector.js";
-import { DynamicCommand } from "../cli/commands/DynamicCommand.js";
+import { RunCommand } from "../cli/commands/RunCommand.js";
 import { GraphCommand } from "../cli/commands/GraphCommand.js";
 import { DepsCommand } from "../cli/commands/DepsCommand.js";
 import { ComplexityCommand } from "../cli/commands/ComplexityCommand.js";
@@ -18,7 +18,7 @@ import type {
 const log = logger.child({ component: "processing" });
 
 /**
- * EngineAbortError — thrown by ProcessingManager.runDynamic when the dynamic run threw (attach failed,
+ * EngineAbortError — thrown by ProcessingManager.runTrace when the run threw (attach failed,
  * engine crashed, recording threw). By this point the terminal envelope has already been streamed to the
  * collector and the emit chain flushed, so each frontend just decides the response: the CLI exits 1, HTTP
  * answers 500, MCP returns an error tool result. Carries the original cause for logging.
@@ -47,21 +47,21 @@ export function emitFailureMessage(collector: string, count: number, last: EmitR
  * ProcessingManager — the orchestration tier. Owns everything that turns a validated request into a finished
  * {@link Trace}: resolving the collector, serializing the streaming emit chain, wiring `onProgress`, the abort
  * flush, and folding a collector failure into a diagnostic — then running the command. It performs no stdout /
- * `process.exit`; it returns a {@link ProcessingResult} the OutputManager + adapter consume. The dynamic command
+ * `process.exit`; it returns a {@link ProcessingResult} the OutputManager + adapter consume. The run command
  * is injected (so tests can drive it with a fake tracer); the static commands are cheap to construct per call.
  */
 export class ProcessingManager {
   constructor(
-    private readonly dynamic: DynamicCommand = new DynamicCommand(new Tracer(), new S3ArtifactStore()),
+    private readonly runCommand: RunCommand = new RunCommand(new Tracer(), new S3ArtifactStore()),
   ) {}
 
   /**
-   * Run a dynamic breakpoint trace. Streams to the collector (an explicit --emit / TRACE_COLLECTOR_URL wins,
+   * Run a breakpoint trace. Streams to the collector (an explicit --emit / TRACE_COLLECTOR_URL wins,
    * else a locally-running dashboard is auto-discovered). Emits are serialized through one promise chain so a
    * slow POST can't land a stale envelope after a newer one. On a run that throws, the terminal envelope was
    * already emitted via onProgress — flush the chain so that POST lands, then throw {@link EngineAbortError}.
    */
-  async runDynamic(normalized: NormalizedRun): Promise<ProcessingResult> {
+  async runTrace(normalized: NormalizedRun): Promise<ProcessingResult> {
     const collector = await Collector.resolve(normalized.emit);
     let emitChain: Promise<unknown> = Promise.resolve();
     // Only the count and the most recent failure are surfaced, so keep just those — not every failed result.
@@ -74,7 +74,7 @@ export class ProcessingManager {
 
     let trace: Trace;
     try {
-      ({ trace } = await this.dynamic.run({
+      ({ trace } = await this.runCommand.run({
         ...normalized.request,
         ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
       }));
@@ -82,7 +82,7 @@ export class ProcessingManager {
       // The run threw. It already emitted a TERMINAL envelope via onProgress that clears the dashboard's
       // "running" session — flush the chain so that POST actually lands, then surface the failure to the caller.
       if (emitToCollector) await emitChain;
-      log.error("dynamic trace aborted before completion", { code: Code.ENGINE_FATAL, err: error });
+      log.error("run aborted before completion", { code: Code.ENGINE_FATAL, err: error });
       throw new EngineAbortError(error);
     }
 
@@ -97,7 +97,7 @@ export class ProcessingManager {
         trace.diagnostics.push(Diagnostic.warn(Code.EMIT, emitFailureMessage(collector, emitFailureCount, lastEmitFailure)));
       }
     }
-    return { trace, render: () => this.dynamic.render(trace) };
+    return { trace, render: () => this.runCommand.render(trace) };
   }
 
   async runGraph(request: GraphRequest): Promise<ProcessingResult> {
@@ -132,7 +132,7 @@ export class ProcessingManager {
 
   /**
    * Forward a finished STATIC envelope to a collector — explicit-only (`TRACE_COLLECTOR_URL`), never the
-   * dynamic auto-discovery: a static analysis carries no sessionId, so the session dashboard can't ingest it.
+   * run command's auto-discovery: a static analysis carries no sessionId, so the session dashboard can't ingest it.
    * Called by the adapter AFTER the output gate so the collector sees the same gated envelope the CLI printed.
    */
   async forwardStatic(trace: Trace): Promise<void> {
