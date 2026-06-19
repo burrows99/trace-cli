@@ -5,8 +5,8 @@ const log = logger.child({ component: "collector" });
 const CT_JSON = "application/json";
 
 /** Well-known local collector URLs probed for auto-discovery, in priority order: the docker/dashboard port
- *  (4747, what README/compose/scenarios use), then the native `trace serve` default (4000). */
-const DEFAULT_CANDIDATES = ["http://localhost:4747", "http://localhost:4000"];
+ *  (14747, the compose-published host port from README/compose/scenarios), then the native `trace serve` default (4000). */
+const DEFAULT_CANDIDATES = ["http://localhost:14747", "http://localhost:4000"];
 const PROBE_TIMEOUT_MS = 500;
 
 /**

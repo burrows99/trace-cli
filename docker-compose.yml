@@ -1,14 +1,14 @@
 # Run the hosted trace dashboard (standalone Next.js: UI + same-origin API + SSE), Postgres (session store),
 # and a local S3 (mock-aws) for recordings:
 #   docker compose up --build
-#   open http://localhost:4747          # the trace dashboard (sessions persisted in Postgres)
-#   open http://localhost:9001          # mock-aws (MinIO) console — minioadmin / minioadmin
-#   psql postgres://trace:trace@localhost:5432/trace -c 'select session_id, at from trace_sessions;'
+#   open http://localhost:14747         # the trace dashboard (sessions persisted in Postgres)
+#   open http://localhost:19001         # mock-aws (MinIO) console — minioadmin / minioadmin
+#   psql postgres://trace:trace@localhost:65432/trace -c 'select session_id, at from trace_sessions;'
 #
 # Emit traces from the host (the CLI runs where your debug target is reachable). Chrome traces record by
 # default and upload the video to mock-aws, attaching a link to the trace:
-#   export S3_ENDPOINT=http://localhost:9000
-#   TRACE_COLLECTOR_URL=http://localhost:4747 trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9
+#   export S3_ENDPOINT=http://localhost:19000
+#   TRACE_COLLECTOR_URL=http://localhost:14747 trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9
 #
 # Bringing the stack up runs the whole end-to-end demo too (Node + React + Chrome targets, all in
 # one demo container), no host setup — `docker compose up --build` starts everything; `docker compose down` stops it all:
@@ -19,7 +19,7 @@ services:
     image: trace-cli
     container_name: trace-dashboard
     ports:
-      - "4747:4747"
+      - "14747:4747"
     environment:
       # The dashboard is database-driven: sessions persist in Postgres (the `db` service).
       - DATABASE_URL=postgres://trace:trace@db:5432/trace
@@ -40,7 +40,7 @@ services:
       - POSTGRES_PASSWORD=trace
       - POSTGRES_DB=trace
     ports:
-      - "5432:5432"   # connect from the host: DATABASE_URL=postgres://trace:trace@localhost:5432/trace
+      - "65432:5432"   # connect from the host: DATABASE_URL=postgres://trace:trace@localhost:65432/trace
     volumes:
       - ./.trace-db-data:/var/lib/postgresql/data
     healthcheck:
@@ -60,8 +60,8 @@ services:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
     ports:
-      - "9000:9000"   # S3 API endpoint → set S3_ENDPOINT=http://localhost:9000
-      - "9001:9001"   # web console
+      - "19000:9000"   # S3 API endpoint → set S3_ENDPOINT=http://localhost:19000
+      - "19001:9001"   # web console
     volumes:
       - ./.mock-aws-data:/data
     restart: unless-stopped
@@ -84,7 +84,7 @@ services:
     environment:
       - TRACE_COLLECTOR_URL=http://dashboard:4747
       - S3_ENDPOINT=http://mock-aws:9000        # upload the recording here (in-network)
-      - S3_PUBLIC_URL=http://localhost:9000      # …but store a host-reachable link for the browser
+      - S3_PUBLIC_URL=http://localhost:19000     # …but store a host-reachable link for the browser
       - S3_BUCKET=traces
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
