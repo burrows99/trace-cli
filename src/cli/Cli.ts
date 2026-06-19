@@ -120,9 +120,12 @@ export class Cli {
     // dashboard updates live as it runs.
     const collector = await Collector.resolve(options.emit);
     let emitChain: Promise<unknown> = Promise.resolve();
-    const emitFailures: EmitResult[] = [];
+    // Only the count and the most recent failure are surfaced, so keep just those — not every failed result.
+    // onProgress can emit on a hot path, and retaining each failure would grow memory without bound.
+    let emitFailureCount = 0;
+    let lastEmitFailure: EmitResult | undefined;
     const emitToCollector = collector
-      ? (envelope: unknown) => { emitChain = emitChain.then(async () => { const result = await Collector.emit(collector, envelope); if (!result.ok) emitFailures.push(result); }); }
+      ? (envelope: unknown) => { emitChain = emitChain.then(async () => { const result = await Collector.emit(collector, envelope); if (!result.ok) { emitFailureCount++; lastEmitFailure = result; } }); }
       : undefined;
 
     const { trace } = await this.#dynamic.run({
@@ -141,10 +144,13 @@ export class Cli {
     if (emitToCollector) {
       emitToCollector(trace.toJSON());
       await emitChain;
-      if (emitFailures.length) {
-        const last = emitFailures[emitFailures.length - 1];
-        const reason = last.status ? `HTTP ${last.status}${last.body ? ` — ${last.body.slice(0, 200)}` : ""}` : (last.error ?? "unknown error");
-        trace.diagnostics.push(Diagnostic.warn(Code.EMIT, `collector ${collector} rejected ${emitFailures.length} emit(s): ${reason}`));
+      if (lastEmitFailure) {
+        // An HTTP status means the collector received the request and rejected it; no status means the POST never
+        // landed (connection refused, timeout, DNS) — word each accurately rather than calling both "rejected".
+        const message = lastEmitFailure.status
+          ? `collector ${collector} rejected ${emitFailureCount} emit(s): HTTP ${lastEmitFailure.status}${lastEmitFailure.body ? ` — ${lastEmitFailure.body.slice(0, 200)}` : ""}`
+          : `${emitFailureCount} emit(s) to collector ${collector} failed: ${lastEmitFailure.error ?? "unknown error"}`;
+        trace.diagnostics.push(Diagnostic.warn(Code.EMIT, message));
       }
     }
     emit(trace, () => this.#dynamic.render(trace), options);
