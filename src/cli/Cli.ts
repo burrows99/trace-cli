@@ -9,7 +9,10 @@ import { InputManager } from "../io/InputManager.js";
 import { InputError } from "../io/InputError.js";
 import { ProcessingManager, EngineAbortError } from "../io/ProcessingManager.js";
 import { OutputManager } from "../io/OutputManager.js";
-import type { ProcessingResult, OutputResult } from "../io/descriptors.js";
+import type {
+  ProcessingResult, OutputResult, OutputOptions,
+  RawRunInput, RawGraphInput, RawDepsInput, RawComplexityInput, RawSymbolsInput,
+} from "../io/descriptors.js";
 import { VERSION } from "../shared/version.js";
 import { DEFAULT_NODE_PORT, DEFAULT_COLLECTOR_PORT } from "../shared/defaults.js";
 import { logger } from "../shared/logger.js";
@@ -43,20 +46,20 @@ export class Cli {
   }
 
   /** Shared tail for the static analyses: render the envelope, forward it to a collector, exit on its error state. */
-  async #finishStatic(result: ProcessingResult, options: any): Promise<never> {
+  async #finishStatic(result: ProcessingResult, options: OutputOptions): Promise<never> {
     const out = this.#output.emit(result, options);
     this.#writeTrace(out);
     await this.#processing.forwardStatic(result.trace);   // post-gate, explicit-only (TRACE_COLLECTOR_URL)
     process.exit(out.exitCode);
   }
 
-  async #runDynamic(options: any): Promise<void> {
+  async #runTrace(options: RawRunInput): Promise<void> {
     let normalized;
     try { normalized = this.#input.acceptRun(options); }
     catch (error) { if (error instanceof InputError) usage(error.message); throw error; }
 
     let result: ProcessingResult;
-    try { result = await this.#processing.runDynamic(normalized); }
+    try { result = await this.#processing.runTrace(normalized); }
     catch (error) {
       // The run threw; ProcessingManager already flushed the terminal envelope to the collector and logged the
       // ENGINE_FATAL cause. Surface the failure as a non-zero exit, matching the old inline behavior.
@@ -68,26 +71,26 @@ export class Cli {
     process.exit(out.exitCode);
   }
 
-  async #runGraph(options: any): Promise<void> {
+  async #runGraph(options: RawGraphInput): Promise<void> {
     let request;
     try { request = this.#input.acceptGraph(options); }
     catch (error) { if (error instanceof InputError) usage(error.message); throw error; }
     await this.#finishStatic(await this.#processing.runGraph(request), options);
   }
 
-  async #runDeps(options: any): Promise<void> {
+  async #runDeps(options: RawDepsInput): Promise<void> {
     let request;
     try { request = this.#input.acceptDeps(options); }
     catch (error) { if (error instanceof InputError) usage(error.message); throw error; }
     await this.#finishStatic(await this.#processing.runDeps(request), options);
   }
 
-  async #runComplexity(path: string, options: any): Promise<void> {
+  async #runComplexity(path: string, options: Omit<RawComplexityInput, "path">): Promise<void> {
     const request = this.#input.acceptComplexity({ ...options, path });
     await this.#finishStatic(await this.#processing.runComplexity(request), options);
   }
 
-  async #runSymbols(file: string, options: any): Promise<void> {
+  async #runSymbols(file: string, options: Omit<RawSymbolsInput, "file">): Promise<void> {
     let request;
     try { request = this.#input.acceptSymbols({ ...options, file }); }
     catch (error) { if (error instanceof InputError) usage(error.message); throw error; }
@@ -119,7 +122,7 @@ export class Cli {
       .option("--json [path]", "envelope as JSON: to a file if a path is given, else to stdout")
       .option("--concise", "trim the PRINTED --json envelope (stdout/file) for token-tight agent reads: per hit, locals collapse to key names and the call stack keeps its top 2 frames (watched --expression values, location & timing kept). Does NOT affect --emit — the collector always receives the full envelope. Re-run --detailed for everything.")
       .option("--detailed", "full --json envelope: every local's value and the complete call stack at each hit (the default)")
-      .action((options) => this.#runDynamic(options));
+      .action((options) => this.#runTrace(options));
 
     // static analysis — code structure without running the app. Each command shells out to one analyzer and
     // emits the same Trace envelope as the runtime `run` command (call graph · deps · complexity · symbols).

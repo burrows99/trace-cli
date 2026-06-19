@@ -15,7 +15,7 @@ export interface ToolRun {
  * runTool — spawn a backing CLI tool, capture its output, and NEVER throw. A missing binary (ENOENT), a
  * timeout, or a non-zero exit all resolve to `{ ok: false, error }` so the calling command can turn the
  * failure into an error diagnostic on a still-well-formed Trace — the same "an agent always gets a Trace"
- * contract the dynamic/graph commands honour. The shared seam for the static analyses (madge/lizard/tree-sitter).
+ * contract the run/graph commands honour. The shared seam for the static analyses (madge/lizard/tree-sitter).
  *
  * Output is captured to temp FILES, not pipes. A child that prints a large payload and then calls
  * `process.exit()` (madge does this) truncates piped stdout to the OS pipe buffer (~64KB on macOS) — the

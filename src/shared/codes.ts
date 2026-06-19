@@ -20,7 +20,7 @@ export const Code = {
   /** the outgoing envelope failed its own JSON-Schema validation (a structural bug — should never ship) */
   SCHEMA: "E_SCHEMA",
 
-  // ── dynamic trace (`run`) ────────────────────────────────────────────────
+  // ── run (breakpoint trace) ───────────────────────────────────────────────
   /** the tracer engine threw — no usable trace was produced */
   ENGINE_FATAL: "ENGINE_FATAL",
   /** a Chrome journey step (goto/click/type/…) failed */

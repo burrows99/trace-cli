@@ -8,7 +8,7 @@
 # Emit traces from the host (the CLI runs where your debug target is reachable). Chrome traces record by
 # default and upload the video to mock-aws, attaching a link to the trace:
 #   export S3_ENDPOINT=http://localhost:19000
-#   TRACE_COLLECTOR_URL=http://localhost:14747 trace dynamic --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9
+#   TRACE_COLLECTOR_URL=http://localhost:14747 trace run --chrome 9222 --url http://localhost:3000 --bp src/App.tsx:9
 #
 # Bringing the stack up runs the whole end-to-end demo too (Node + React + Chrome targets, all in
 # one demo container), no host setup — `docker compose up --build` starts everything; `docker compose down` stops it all:

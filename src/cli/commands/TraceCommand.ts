@@ -22,7 +22,7 @@ export interface Envelope {
 
 /**
  * TraceCommand — the {@link CliCommand} specialization for every command that produces a Trace envelope
- * (dynamic, graph, doctor). Each subclass assembles only its own `data` payload + diagnostics; the base owns
+ * (run, graph, doctor). Each subclass assembles only its own `data` payload + diagnostics; the base owns
  * the part they all repeated verbatim — stamping version, timestamp and duration, and deriving `ok` from the
  * diagnostics — so the envelope shape stays identical across commands and lives in exactly one place.
  * `render` is the human view each trace-producing command must supply (what prints when `--json` is off).

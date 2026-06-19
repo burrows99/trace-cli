@@ -84,7 +84,7 @@ trace schema               # print the JSON Schema (the contract)
 src/
   cli.js                  # commander root; registers subcommands
   commands/
-    dynamic.js            # wraps engine/trace.js → envelope (today's behavior, incl. auto-recorded Chrome replay)
+    run.js                # wraps engine/trace.js → envelope (today's behavior, incl. auto-recorded Chrome replay)
     static.js             # deps | complexity | symbols | search dispatch
     exec.js               # otel-cli exec
     spans.js              # otel store query

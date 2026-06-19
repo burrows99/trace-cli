@@ -29,8 +29,8 @@ test("InputValidator.guardRunTrigger: requires a breakpoint first, then the targ
   assert.equal(iv.guardRunTrigger(runRaw({ curl: "c" }), { target: TargetKind.Node, isChrome: false, steps: [] }), undefined);
 });
 
-test("InputValidator.validateDynamic: an out-of-range port throws InputError carrying the problems", () => {
-  const error = thrown(() => iv.validateDynamic({ target: TargetKind.Node, port: 70000, breakpoints: ["a:1"], exprs: [], steps: [] }));
+test("InputValidator.validateRun: an out-of-range port throws InputError carrying the problems", () => {
+  const error = thrown(() => iv.validateRun({ target: TargetKind.Node, port: 70000, breakpoints: ["a:1"], exprs: [], steps: [] }));
   assert.ok(error instanceof InputError);
   assert.match(error.message, /^invalid input —/);
   assert.ok(error.problems.length >= 1);

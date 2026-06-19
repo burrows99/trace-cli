@@ -1,4 +1,4 @@
-// JourneyRunner.parseStep — the pure `--step` parser DynamicCommand feeds the Chrome journey. The runner's
+// JourneyRunner.parseStep — the pure `--step` parser RunCommand feeds the Chrome journey. The runner's
 // CDP driving needs a live Chrome (not exercised here); this pins the parsing contract. Run via `npm test`.
 import "reflect-metadata"; // StepResult uses class-validator decorators (the domain loads this via Trace.ts)
 import { test } from "node:test";

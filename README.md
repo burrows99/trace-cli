@@ -60,9 +60,9 @@ trace-cli run --chrome --url http://localhost:5173/route --breakpoint src/pages/
 <summary>Library (TypeScript)</summary>
 
 ```ts
-import { DynamicCommand, Trace } from "trace-cli"; // DynamicCommand powers `trace run`
+import { RunCommand, Trace } from "trace-cli"; // RunCommand powers `trace run`
 
-const { trace } = await new DynamicCommand().run({
+const { trace } = await new RunCommand().run({
   target: "node", port: 9229,
   curl: 'curl -s http://127.0.0.1:3100/price?qty=3',
   breakpoints: ["test/servers/node-api/server.js:42"],

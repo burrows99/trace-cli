@@ -1,10 +1,10 @@
 import { TargetKind } from "../domain/Target.js";
-import { DynamicInput, GraphInput, validateSteps } from "../cli/CommandInputs.js";
+import { RunInput, GraphInput, validateSteps } from "../cli/CommandInputs.js";
 import { InputError } from "./InputError.js";
 import type { RawRunInput } from "./descriptors.js";
 
-/** The normalized dynamic fields the strict DTO validation needs (target + trigger, post-`pickTarget`). */
-export interface DynamicFields {
+/** The normalized run fields the strict DTO validation needs (target + trigger, post-`pickTarget`). */
+export interface RunFields {
   target: TargetKind; port: number; launch?: boolean; profileDir?: string; headed?: boolean;
   breakpoints: string[]; exprs: string[]; steps: string[]; curl?: string;
 }
@@ -39,9 +39,9 @@ export class InputValidator {
     if (!isChrome && !raw.curl) throw new InputError(`${target} target needs --curl`);
   }
 
-  /** Strict DTO validation of the normalized dynamic input (the class-validator regime). */
-  validateDynamic(fields: DynamicFields): void {
-    const problems = new DynamicInput(fields).validate();
+  /** Strict DTO validation of the normalized run input (the class-validator regime). */
+  validateRun(fields: RunFields): void {
+    const problems = new RunInput(fields).validate();
     if (problems.length) throw new InputError(`invalid input — ${problems.join("; ")}`, problems);
   }
 

@@ -36,7 +36,7 @@ const redactStep = (step: string) => step.startsWith("type:") ? step.replace(/=.
 export class InputManager {
   #validator = new InputValidator();
 
-  /** Validate + normalize a `run` invocation into a dynamic request + the collector (`--emit`) policy. */
+  /** Validate + normalize a `run` invocation into a run request + the collector (`--emit`) policy. */
   acceptRun(raw: RawRunInput): NormalizedRun {
     this.#validator.guardRunFlags(raw);
     const { target, port, launch, profileDir, headed } = pickTarget(raw);
@@ -44,7 +44,7 @@ export class InputManager {
     // Chrome trigger = an ordered UI journey; --url is shorthand for a leading `goto:`. Node trigger = a curl.
     const steps: string[] = isChrome ? [...(raw.url ? [`goto:${raw.url}`] : []), ...raw.step] : [];
     this.#validator.guardRunTrigger(raw, { target, isChrome, steps });
-    this.#validator.validateDynamic({ target, port, launch, profileDir, headed, breakpoints: raw.breakpoint, exprs: raw.expression, steps, curl: raw.curl });
+    this.#validator.validateRun({ target, port, launch, profileDir, headed, breakpoints: raw.breakpoint, exprs: raw.expression, steps, curl: raw.curl });
     this.#validator.validateSteps(steps);
 
     const request: NormalizedRun["request"] = {

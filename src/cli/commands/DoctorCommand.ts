@@ -15,7 +15,7 @@ export interface ToolStatus { name: string; pillar: string; purpose: string; pre
 const TOOLS: ToolDef[] = [
   { name: "node", pillar: "engine", purpose: "Node --inspect (CDP) target", cmd: "node", args: ["--version"] },
   { name: "chrome", pillar: "frontend", purpose: "Chrome target / recording frames", chrome: true },
-  { name: "ffmpeg", pillar: "frontend", purpose: "dynamic --record video", cmd: "ffmpeg", args: ["-version"] },
+  { name: "ffmpeg", pillar: "frontend", purpose: "run --record video", cmd: "ffmpeg", args: ["-version"] },
   { name: "rg", pillar: "static", purpose: "static search (ripgrep)", cmd: "rg", args: ["--version"] },
   { name: "lizard", pillar: "static", purpose: "static complexity", cmd: "lizard", args: ["--version"] },
   { name: "tree-sitter", pillar: "static", purpose: "static symbols (AST)", cmd: "tree-sitter", args: ["--version"] },

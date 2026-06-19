@@ -1,5 +1,5 @@
 import type { Trace } from "../domain/Trace.js";
-import type { DynamicRequest } from "../cli/commands/DynamicCommand.js";
+import type { RunRequest } from "../cli/commands/RunCommand.js";
 import type { GraphRequest } from "../cli/commands/GraphCommand.js";
 import type { DepsRequest } from "../cli/commands/DepsCommand.js";
 import type { ComplexityRequest } from "../cli/commands/ComplexityCommand.js";
@@ -71,13 +71,13 @@ export interface RawSymbolsInput {
 
 // ── normalized input (InputManager → ProcessingManager) ────────────────────────────────────────────────────
 
-/** The dynamic-run request minus the live streaming sink — ProcessingManager owns and injects `onProgress`. */
-export type RunRequest = Omit<DynamicRequest, "onProgress">;
+/** The run request minus the live streaming sink — ProcessingManager owns and injects `onProgress`. */
+export type NormalizedRunRequest = Omit<RunRequest, "onProgress">;
 
-/** The dynamic command's normalized form: the validated request plus the resolved collector policy (the raw
+/** The run command's normalized form: the validated request plus the resolved collector policy (the raw
  *  `--emit` value; `Collector.resolve` turns it into an explicit target or auto-discovers a local dashboard). */
 export interface NormalizedRun {
-  request: RunRequest;
+  request: NormalizedRunRequest;
   emit?: string | null;
 }
 

@@ -1,7 +1,7 @@
 // InputManager tests — the input tier. It accepts a transport-neutral parsed object (NOT argv), throws a
 // structured InputError (never process.exit) on bad input, and normalizes the rest into a typed request.
 // Pure + synchronous: no engine, no network. Covers the guards, the SECURITY-critical step redaction, and the
-// target/args normalization that used to be inlined in Cli.#runDynamic.
+// target/args normalization that used to be inlined in Cli.#runTrace.
 import "reflect-metadata";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -58,7 +58,7 @@ test("acceptRun rejects an unknown step verb as an invalid-step InputError carry
   assert.ok(error.problems.length >= 1);
 });
 
-test("acceptRun surfaces a DynamicInput violation (out-of-range port) as an invalid-input InputError", () => {
+test("acceptRun surfaces a RunInput violation (out-of-range port) as an invalid-input InputError", () => {
   const error = thrown(() => im.acceptRun(runRaw({ node: "70000", curl: "c" })));
   assert.ok(error instanceof InputError);
   assert.match(error.message, /^invalid input —/);

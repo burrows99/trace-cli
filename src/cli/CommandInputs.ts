@@ -43,7 +43,7 @@ export function validateSteps(rawSteps: string[]): string[] {
 }
 
 /** Input contract for `trace-cli run`. */
-export class DynamicInput {
+export class RunInput {
   @IsIn(Object.values(TargetKind)) target: TargetKind;
   // In Chrome launch mode the port isn't known until the browser is spawned, so only range-check a real port.
   @ValidateIf((input) => !input.launch) @IsInt() @Min(1) @Max(MAX_PORT) port: number;
@@ -55,7 +55,7 @@ export class DynamicInput {
   @IsOptional() @IsArray() @IsString({ each: true }) steps?: string[]; // chrome: the ordered UI journey
   @IsOptional() @IsString() curl?: string;
 
-  constructor(init: Partial<DynamicInput> = {}) {
+  constructor(init: Partial<RunInput> = {}) {
     this.target = init.target ?? TargetKind.Node;
     this.port = init.port ?? 0;
     this.breakpoints = init.breakpoints ?? [];

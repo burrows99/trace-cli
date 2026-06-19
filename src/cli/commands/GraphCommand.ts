@@ -29,7 +29,7 @@ export interface GraphRequest {
  * graph rooted at the entry, and normalize it into one Trace envelope (`data.graph`). The provider is the
  * injected collaborator (Dependency Inversion); this class owns the use-case and the envelope, not the analysis.
  * A resolution/analysis failure becomes an error diagnostic on a still-well-formed envelope, matching how the
- * dynamic command surfaces engine failures — an agent always gets back a Trace.
+ * run command surfaces engine failures — an agent always gets back a Trace.
  */
 export class GraphCommand extends TraceCommand<GraphRequest> {
   async run(request: GraphRequest): Promise<Trace> {

@@ -25,7 +25,7 @@ export interface AnalysisOutcome {
  * declares its identity (tool/command/errorCode/component) and supplies only the two parts that differ:
  * the tool call ({@link invocation}) and how to read its output ({@link interpret}). A tool that is missing,
  * times out, or emits unparseable output becomes a `<errorCode>` error on a still-well-formed Trace, honouring
- * the same "an agent always gets a Trace" contract the dynamic/graph commands keep.
+ * the same "an agent always gets a Trace" contract the run/graph commands keep.
  */
 export abstract class ShellAnalysisCommand<Req extends { args?: Record<string, unknown> }> extends TraceCommand<Req> {
   /** Binary to spawn, e.g. `"madge"`. */              protected abstract readonly tool: string;
