@@ -79,9 +79,31 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
       const trace = this.#toTrace(capture, { sessionId, args: request.args ?? {}, startedAtMs });
       if (isChrome) await this.#record(capture, trace, sessionId, request.recordOut);
       return { trace, capture };
+    } catch (error) {
+      // A throw here (attach failed, engine crashed, recording threw) would otherwise leave the initial
+      // `running` partial (emitted above) orphaned in the dashboard forever — the session never resolves.
+      // Emit a TERMINAL envelope (no `running` flag → meta.running absent; ok:false via the error diagnostic)
+      // so the dashboard flips it to failed, and surface the cause in the stderr trail with the same code.
+      log.error("trace run aborted before completion", { code: Code.ENGINE_FATAL, sessionId, err: error });
+      request.onProgress?.(this.#abortedTrace(error, context));
+      throw error;
     } finally {
       launched?.kill();
     }
+  }
+
+  /** A terminal envelope for a run that threw: empty data, an ENGINE_FATAL error, and crucially NO `running`
+   *  flag, so the collector resolves the session instead of leaving its initial running partial hanging. */
+  #abortedTrace(error: unknown, context: RunCtx): Trace {
+    return this.envelope({
+      command: `run.${context.target}`,
+      data: new TraceData({ events: [] }),
+      diagnostics: [Diagnostic.error(Code.ENGINE_FATAL, String((error as Error)?.message ?? error).split("\n")[0])],
+      sessionId: context.sessionId,
+      args: context.args,
+      startedAtMs: context.startedAtMs,
+      target: new TargetReference({ kind: context.target, source: "cdp", trigger: context.trigger }),
+    });
   }
 
   /**
@@ -103,7 +125,10 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
   #toTrace(capture: CaptureResult, context: { sessionId: string; args: Record<string, unknown>; startedAtMs: number }): Trace {
     const source = "cdp";
     const diagnostics: Diagnostic[] = [];
-    if (capture.fatal) diagnostics.push(Diagnostic.error(Code.ENGINE_FATAL, String(capture.fatal).split("\n")[0]));
+    if (capture.fatal) {
+      log.error("engine reported a fatal error", { code: Code.ENGINE_FATAL, sessionId: context.sessionId, fatal: String(capture.fatal).split("\n")[0] });
+      diagnostics.push(Diagnostic.error(Code.ENGINE_FATAL, String(capture.fatal).split("\n")[0]));
+    }
     // A failed journey step (selector not found / timed out) flips the envelope's `ok` — same gate the old
     // `journey` command applied to its exit code, now expressed as an error diagnostic.
     for (const step of capture.steps ?? []) if (!step.ok) diagnostics.push(Diagnostic.error(Code.STEP_FAILED, `#${step.sequence} ${step.step}${step.note ? " — " + step.note : ""}`));
@@ -150,13 +175,32 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     try {
       const videoOutputPath = outputPath ?? join(tmpdir(), `trace-${sessionId}.mp4`);
       const videoPath = await Recorder.renderJourney(capture.frames ?? [], capture.traced ?? [], videoOutputPath);
-      if (!videoPath) { log.warn("no frames captured — nothing to record", { code: Code.RECORD_EMPTY, sessionId }); return; }
-      const upload = this.artifacts && this.artifacts.isConfigured() ? await this.artifacts.upload(videoPath, `recordings/${sessionId}.mp4`, "video/mp4") : null;
+      if (!videoPath) {
+        // Both channels carry the same code: the stderr trail AND an envelope diagnostic, so an agent reading
+        // --json learns the chrome run produced no video (instead of inferring it from a missing `recording`).
+        log.warn("no frames captured — nothing to record", { code: Code.RECORD_EMPTY, sessionId });
+        trace.diagnostics.push(Diagnostic.warn(Code.RECORD_EMPTY, "no frames captured — the debug-replay video is empty (no breakpoint hits, or the journey produced no frames)."));
+        return;
+      }
+      const uploadConfigured = this.artifacts?.isConfigured() ?? false;
+      const upload = uploadConfigured ? await this.artifacts!.upload(videoPath, `recordings/${sessionId}.mp4`, "video/mp4") : null;
       trace.data.recording = upload ? new Recording({ url: upload.url, bytes: upload.bytes }) : new Recording({ path: videoPath });
-      if (upload) log.info("recording uploaded", { sessionId, url: upload.url, bytes: upload.bytes });
-      else log.info("recording saved locally — set S3_ENDPOINT to upload + get a link", { sessionId, path: videoPath });
+      if (upload) {
+        log.info("recording uploaded", { sessionId, url: upload.url, bytes: upload.bytes });
+      } else if (uploadConfigured) {
+        // S3 WAS configured but upload() returned null → it failed (the error was logged inside the store).
+        // The video is still saved locally, but the dashboard gets no link — surface that instead of
+        // reporting a clean local save, so "no video link" isn't silently indistinguishable from success.
+        log.warn("recording upload failed — keeping local copy", { code: Code.UPLOAD, sessionId, path: videoPath });
+        trace.diagnostics.push(Diagnostic.warn(Code.UPLOAD, `recording upload failed — video saved locally at ${videoPath}, no dashboard link (check S3_ENDPOINT / credentials).`));
+      } else {
+        log.info("recording saved locally — set S3_ENDPOINT to upload + get a link", { sessionId, path: videoPath });
+      }
     } catch (error: any) {
+      // Render or upload threw. Surface it in the envelope too (a warn — the trace data is still valid, only
+      // the replay is missing) so "no video" is never silent. Previously this was a stderr log the agent never saw.
       log.error("recording failed", { code: Code.RECORD, sessionId, err: error });
+      trace.diagnostics.push(Diagnostic.warn(Code.RECORD, `debug-replay recording failed — ${String(error?.message ?? error).split("\n")[0]}`));
     }
   }
 }

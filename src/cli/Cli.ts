@@ -128,15 +128,25 @@ export class Cli {
       ? (envelope: unknown) => { emitChain = emitChain.then(async () => { const result = await Collector.emit(collector, envelope); if (!result.ok) { emitFailureCount++; lastEmitFailure = result; } }); }
       : undefined;
 
-    const { trace } = await this.#dynamic.run({
-      target, port, launch,
-      breakpoints: options.breakpoint, exprs: options.expression,
-      steps, curl: options.curl,
-      root: options.root, maxHits: options.maxHits,
-      recordOut: options.output,
-      args: { target, ...(launch ? { launch: true } : { port }), breakpoints: options.breakpoint, ...(options.root ? { root: options.root } : {}), ...(options.maxHits ? { maxHits: options.maxHits } : {}), ...(steps.length ? { steps: steps.map(redactStep) } : {}), ...(options.curl ? { curl: options.curl } : {}) },
-      ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
-    });
+    let trace: Trace;
+    try {
+      ({ trace } = await this.#dynamic.run({
+        target, port, launch,
+        breakpoints: options.breakpoint, exprs: options.expression,
+        steps, curl: options.curl,
+        root: options.root, maxHits: options.maxHits,
+        recordOut: options.output,
+        args: { target, ...(launch ? { launch: true } : { port }), breakpoints: options.breakpoint, ...(options.root ? { root: options.root } : {}), ...(options.maxHits ? { maxHits: options.maxHits } : {}), ...(steps.length ? { steps: steps.map(redactStep) } : {}), ...(options.curl ? { curl: options.curl } : {}) },
+        ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
+      }));
+    } catch (error) {
+      // The run threw (attach failed, engine crashed, recording threw). It already emitted a TERMINAL envelope
+      // via onProgress that clears the dashboard's "running" session — flush the chain so that POST actually
+      // lands before we exit, then surface the failure (non-zero exit + the same ENGINE_FATAL code in the log).
+      if (emitToCollector) await emitChain;
+      log.error("dynamic trace aborted before completion", { code: Code.ENGINE_FATAL, err: error });
+      process.exit(1);
+    }
 
     // Flush the final (complete) envelope and all pending emits BEFORE rendering, so a rejected emit
     // (a 400 schema error, a 503 dead store) becomes a visible diagnostic in the printed/--json envelope
