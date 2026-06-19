@@ -21,6 +21,9 @@ export const Code = {
   STEP_FAILED: "STEP_FAILED",
   /** a requested breakpoint never bound at the target (bad file:line, or that line never loads) */
   BP_UNBOUND: "BP_UNBOUND",
+  /** breakpoint(s) bound but no event fired — the trigger likely didn't exercise this path (the JSON
+   *  counterpart of the renderer's "no breakpoints hit" line, so a `--json` reader sees the why too) */
+  BP_BOUND_UNHIT: "BP_BOUND_UNHIT",
   /** writing the Chrome screen + trace-panel recording failed */
   RECORD: "RECORD_FAILED",
   /** nothing was captured to record (no frames) — usually no breakpoint hit during the journey */

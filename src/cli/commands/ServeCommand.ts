@@ -35,7 +35,11 @@ export class ServeCommand extends CliCommand<ServeOptions, void> {
       throw new Error(`dashboard not built — run \`npm run build\` (expected ${SERVER_ENTRY}).`);
     }
 
-    log.info("starting dashboard", { url: `http://localhost:${port}`, host });
+    // Print the exact emit URL to copy. Auto-discovery only probes the well-known ports (14747 / the 4000
+    // default); on any other --port a run must point at this URL explicitly, so don't make the user guess it.
+    const collectorUrl = `http://localhost:${port}`;
+    log.info("starting dashboard", { url: collectorUrl, host });
+    log.info("stream traces here", { hint: `trace dynamic … --emit ${collectorUrl}   (or: export TRACE_COLLECTOR_URL=${collectorUrl})` });
     const child = spawn(process.execPath, [SERVER_ENTRY], {
       stdio: "inherit",
       env: { ...process.env, PORT: String(port), HOSTNAME: host, DATABASE_URL: databaseUrl },

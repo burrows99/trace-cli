@@ -15,3 +15,4 @@ export type { StoreOptions } from "./collector/createSessionStore.js";
 export { summarize } from "./collector/SessionStore.js";
 export type { SessionStore, SessionSummary, EnvelopePlain } from "./collector/SessionStore.js";
 export { Trace } from "./domain/Trace.js";
+export { Code } from "./shared/codes.js"; // shared issue-code vocabulary, so ingest responses carry the same codes as CLI diagnostics

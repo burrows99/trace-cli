@@ -4,6 +4,13 @@ import { Code } from "../shared/codes.js";
 const log = logger.child({ component: "collector" });
 const CT_JSON = "application/json";
 
+/**
+ * The outcome of one emit. `ok` mirrors the old boolean; `status`/`body` (on an HTTP rejection) and `error`
+ * (on a network/throw failure) let the caller surface *why* an emit failed — into the envelope's diagnostics
+ * and the logs — instead of silently dropping it (a 400 used to log at `info` and the bool was swallowed).
+ */
+export interface EmitResult { ok: boolean; status?: number; body?: string; error?: string }
+
 /** Well-known local collector URLs probed for auto-discovery, in priority order: the docker/dashboard port
  *  (14747, the compose-published host port from README/compose/scenarios), then the native `trace serve` default (4000). */
 const DEFAULT_CANDIDATES = ["http://localhost:14747", "http://localhost:4000"];
@@ -19,15 +26,22 @@ const PROBE_TIMEOUT_MS = 500;
  */
 export class Collector {
   /** POST an envelope to a collector's /v1/traces (used when TRACE_COLLECTOR_URL / --emit is set). */
-  static async emit(url: string, envelope: unknown): Promise<boolean> {
+  static async emit(url: string, envelope: unknown): Promise<EmitResult> {
     const endpoint = url.replace(/\/+$/, "") + "/v1/traces";
     try {
       const response = await fetch(endpoint, { method: "POST", headers: { "content-type": CT_JSON }, body: JSON.stringify(envelope) });
-      log.info("emitted envelope", { endpoint, status: response.status });
-      return response.ok;
+      if (response.ok) {
+        log.info("emitted envelope", { endpoint, status: response.status });
+        return { ok: true, status: response.status };
+      }
+      // A rejection is a real failure — log it at error with the collector's reason (e.g. "invalid envelope",
+      // "trace store unavailable"), not at info. The caller folds this into the envelope's diagnostics.
+      const body = await response.text().catch(() => "");
+      log.error("emit rejected", { code: Code.EMIT, endpoint, status: response.status, body: body.slice(0, 500) });
+      return { ok: false, status: response.status, body };
     } catch (error: any) {
       log.error("emit failed", { code: Code.EMIT, endpoint, err: error });
-      return false;
+      return { ok: false, error: String(error?.message ?? error) };
     }
   }
 

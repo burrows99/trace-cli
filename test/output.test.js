@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 import { condense } from "../dist/cli/Cli.js";
 import { Code } from "../dist/shared/codes.js";
+import { Collector } from "../dist/collector/Collector.js";
 
 /** A trace-shaped plain envelope with two breakpoint hits (full locals + a 5-frame stack + a watched expr). */
 function fullEnvelope() {
@@ -68,5 +69,15 @@ test("Code registry: stable, unique, greppable values shared by both channels", 
   // the envelope's existing diagnostic codes are part of the one vocabulary
   assert.equal(Code.CODEGRAPH_FAILED, "CODEGRAPH_FAILED");
   assert.equal(Code.BP_UNBOUND, "BP_UNBOUND");
+  assert.equal(Code.BP_BOUND_UNHIT, "BP_BOUND_UNHIT");
   assert.equal(Code.SCHEMA, "E_SCHEMA");
+});
+
+test("Collector.emit: a failed POST resolves to a rich result (never throws, never a bare bool)", async () => {
+  // Port 1 is unbound → fetch rejects (connection refused). emit must catch it and return a structured
+  // result so the caller can surface *why* an emit failed instead of swallowing a `false`.
+  const result = await Collector.emit("http://127.0.0.1:1", { tool: "trace" });
+  assert.equal(result.ok, false, "a refused emit is not ok");
+  assert.equal(typeof result.error, "string", "the failure reason is carried back, not dropped");
+  assert.ok(result.error.length > 0, "error message is non-empty");
 });
