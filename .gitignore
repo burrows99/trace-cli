@@ -12,3 +12,5 @@ npm-debug.log*
 dist/
 
 graphify-out/
+# `trace exports` output — regenerable skill copy + HTML maps, not source
+.claude/skills/trace/

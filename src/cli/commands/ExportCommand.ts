@@ -9,6 +9,9 @@ import { DepsCommand } from "./DepsCommand.js";
 
 const log = logger.child({ component: "export" });
 const GRAPH_DEPTH = 6; // rooted-mode knob; unused in the repo map but GraphRequest requires it
+// Keep the deps map about THIS project: drop dependency/build/cache trees (incl. a submodule's build output),
+// mirroring the source-discovery ignore set the repo graph already uses. madge --exclude takes a path regexp.
+const DEPS_EXCLUDE = "(^|/)(node_modules|dist|build|out|\\.next|\\.turbo|\\.cache|coverage|vendor|__pycache__)/";
 
 export interface ExportRequest {
   dir?: string;     // target project root (default: cwd) — also the project the maps are built from
@@ -76,7 +79,7 @@ export class ExportCommand extends CliCommand<ExportRequest, ExportResult> {
       }),
       await this.#writeMap("deps", exportDir, async () => {
         const command = new DepsCommand();
-        const trace = await command.run({ entry: projectRoot, root: projectRoot, args: { entry: projectRoot } });
+        const trace = await command.run({ entry: projectRoot, root: projectRoot, exclude: DEPS_EXCLUDE, args: { entry: projectRoot } });
         return { html: command.renderHtml(trace), ok: trace.ok };
       }),
     ];
