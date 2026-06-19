@@ -79,7 +79,7 @@ test("a non-existent entry fails into an error envelope, not a throw", async () 
 
 test("discoverSourceFiles walks a directory (extension-filtered) and resolveRepoRoot detects the project root", () => {
   const found = discoverSourceFiles(ROOT, { maxFiles: 100 });
-  assert.deepEqual(found.files.map((f) => f.split("/").pop()).sort(), ["helper.ts", "sample.ts"]);
+  assert.deepEqual(found.files.map((f) => f.split(/[/\\]/).pop()).sort(), ["helper.ts", "sample.ts"]);
   assert.equal(found.truncated, false);
   assert.equal(discoverSourceFiles(ROOT, { maxFiles: 1 }).truncated, true, "the file cap flips truncated");
   assert.ok(isDirectory(ROOT) && !isDirectory(ROOT + "/sample.ts"));

@@ -4,7 +4,7 @@ import { Trace, TraceData } from "../../domain/Trace.js";
 import { Diagnostic } from "../../domain/Diagnostic.js";
 import { logger } from "../../shared/logger.js";
 import { Code } from "../../shared/codes.js";
-import { findProjectRoot } from "../../shared/projectRoot.js";
+import { findProjectRoot, findProjectRootFrom } from "../../shared/projectRoot.js";
 import { createCodeGraphProvider } from "../../codegraph/createCodeGraphProvider.js";
 import type { CodeGraph, EntryReference } from "../../codegraph/CodeGraphProvider.js";
 import { resolveRepoRoot } from "../../codegraph/sourceFiles.js";
@@ -45,9 +45,10 @@ export class GraphCommand extends TraceCommand<GraphRequest> {
 
     try {
       if (request.repo || !request.entry) {
-        // Repo map: resolve the directory to cover — an explicit --root/dir, else the detected project root of cwd
-        // (nearest tsconfig/package.json/.git), so a bare `trace graph` maps the project it's run in.
-        const root = resolveRepoRoot(request.root ?? process.cwd());
+        // Repo map: an explicit --root/dir is mapped as given; with neither, detect the nearest project root by
+        // walking UP from cwd (tsconfig/package.json/.git) — so a bare `trace graph` in a subdir maps the whole
+        // project, not just that subdir. `resolveRepoRoot` keeps an explicit file argument pointing at its root.
+        const root = request.root ? resolveRepoRoot(request.root) : findProjectRootFrom(process.cwd());
         const graph = await provider.repoGraph({
           root,
           maxFiles: request.maxFiles ?? MAX_FILES,

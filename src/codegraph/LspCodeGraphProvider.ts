@@ -392,13 +392,18 @@ function relativePath(root: string, file: string): string {
   return (relativized.startsWith("..") || isAbsolute(relativized) ? file : relativized).replace(/\\/g, "/");
 }
 
+/** LSP language ids by extension. The repo map runs against non-TS servers too (gopls/pyright/…), so a wrong
+ *  id can stop a server from parsing a file at all — map the languages we name a default server for, and fall
+ *  back to the bare extension (a sane best-effort) rather than always claiming "typescript". */
+const LANGUAGE_ID_BY_EXT: Record<string, string> = {
+  ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "typescriptreact",
+  ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascriptreact",
+  ".go": "go", ".py": "python", ".rs": "rust", ".rb": "ruby",
+  ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp", ".java": "java",
+};
 function languageIdFor(uri: string): string {
-  switch (extname(fileURLToPath(uri)).toLowerCase()) {
-    case ".tsx": return "typescriptreact";
-    case ".jsx": return "javascriptreact";
-    case ".js": case ".mjs": case ".cjs": return "javascript";
-    default: return "typescript";
-  }
+  const extension = extname(fileURLToPath(uri)).toLowerCase();
+  return LANGUAGE_ID_BY_EXT[extension] ?? extension.replace(/^\./, "") ?? "plaintext";
 }
 
 const KIND_NAMES: Partial<Record<SymbolKind, string>> = {

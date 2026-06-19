@@ -83,7 +83,12 @@ export class InputManager {
         includeExternal: raw.includeExternal,
         inheritance: raw.inheritance,
         server: raw.server,
-        args: { ...(entryString ? { entry: entryString } : {}), ...(raw.root ? { root: raw.root } : {}), ...(raw.server ? { server: raw.server } : {}), ...(raw.maxFiles ? { maxFiles: raw.maxFiles } : {}) },
+        // meta.args is the only portable record of the invocation — keep every flag that changes the map.
+        args: {
+          ...(entryString ? { entry: entryString } : {}), ...(raw.root ? { root: raw.root } : {}), ...(raw.server ? { server: raw.server } : {}),
+          ...(raw.maxFiles ? { maxFiles: raw.maxFiles } : {}), ...(raw.includeExternal ? { includeExternal: true } : {}),
+          ...(raw.inheritance === false ? { inheritance: false } : {}),
+        },
       };
     }
 
@@ -94,7 +99,10 @@ export class InputManager {
       maxDepth: raw.depth,
       includeExternal: raw.includeExternal,
       server: raw.server,
-      args: { entry: entryString, ...(raw.root ? { root: raw.root } : {}), ...(raw.server ? { server: raw.server } : {}), depth: raw.depth },
+      args: {
+        entry: entryString, ...(raw.root ? { root: raw.root } : {}), ...(raw.server ? { server: raw.server } : {}), depth: raw.depth,
+        ...(raw.includeExternal ? { includeExternal: true } : {}),
+      },
     };
   }
 
