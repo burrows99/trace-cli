@@ -7,7 +7,7 @@ allowed-tools: Bash(node:*), Bash(trace-cli:*), Read
 # trace-cli — unified execution tracer for Node & Chrome
 
 - Attaches to a running debug target, sets breakpoints, fires a trigger, prints the full execution trace in one shot. One engine, one protocol driver — **CDP** for Node and Chrome. You read the trace; you never drive the debugger by hand.
-- **Chrome can auto-launch:** `--chrome <port>` attaches to a browser you started (a real, logged-in session); bare `--chrome` (no port) launches a throwaway headless Chrome, traces, records, and tears it down — a frontend trace needs only the app running.
+- **Chrome can auto-launch:** `--chrome <port>` attaches to a browser you started (a real, logged-in session); bare `--chrome` (no port) launches a throwaway headless Chrome, traces, records, and tears it down — a frontend trace needs only the app running. `--chrome-profile <dir>` launches a headed browser on a persistent profile, so a saved-login session is reused without a hand-started browser (use a copy of your profile; the dir is never deleted on teardown).
 - **Static analysis needs no running app:** `trace-cli graph` is a call graph (flow tree) via **LSP call hierarchy** — map what a route/function calls, and find breakpoint coordinates before a runtime trace. TS/JS bundled; other languages via `--server` (`gopls` · `pyright --stdio` · `rust-analyzer` · `clangd`, must expose `callHierarchyProvider`). The other analyses are `deps`/`complexity`/`symbols` — run `trace-cli --help`.
 
 ## Invoking (do this first)

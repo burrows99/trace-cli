@@ -2,7 +2,7 @@ import { IsBoolean, IsInt, IsOptional, IsString } from "class-validator";
 
 import { CdpDriver, log } from "../transport/CdpDriver.js";
 import { Cdp } from "../transport/cdp.js";
-import { TargetKind } from "../domain/Target.js";
+import { ChromeSession } from "./ChromeSession.js";
 import { Screencaster } from "./Screencaster.js";
 import { PageActions } from "./PageActions.js";
 import { TabTracer } from "./TabTracer.js";
@@ -36,14 +36,14 @@ export interface TracedHit { ev: TraceEvent; t: number; }
 export interface TraceConfig { bps: ResolvedBreakpoint[]; root?: string; exprs: string[]; frames: number; maxHits: number; onEvent?: (events: TraceEvent[]) => void; }
 
 /**
- * JourneyRunner — orchestrates a scripted UI journey across one or more page targets: discover (or open) a
- * tab, drive each step, follow any spawned tab and re-point the screencast at it, and — when given
+ * JourneyRunner — orchestrates a scripted UI journey across one or more page targets: open a fresh tab in the
+ * target window, drive each step, follow any spawned tab and re-point the screencast at it, and — when given
  * breakpoints — attach a {@link TabTracer} per tab so the recorder can lay a live trace panel beside the
  * screen. Responsibilities are split: tab plumbing lives here, DOM input in {@link PageActions}, breakpoint
  * capture in {@link TabTracer}. Vendor-neutral: URLs, selectors and breakpoints all come from input.
  */
 export class JourneyRunner {
-  #port: number;
+  #chrome: ChromeSession;
   #screencaster: Screencaster;
   #trace?: TraceConfig;
   #current!: CdpDriver;
@@ -55,7 +55,7 @@ export class JourneyRunner {
   readonly traced: TracedHit[] = [];
   finalUrl?: string;
 
-  constructor(port: number, screencaster: Screencaster, trace?: TraceConfig) { this.#port = port; this.#screencaster = screencaster; this.#trace = trace; }
+  constructor(chrome: ChromeSession, screencaster: Screencaster, trace?: TraceConfig) { this.#chrome = chrome; this.#screencaster = screencaster; this.#trace = trace; }
 
   /** Parse a `--step` string into a {@link Step}. Vocabulary is validated upstream by `StepInput`, not here. */
   static parseStep(rawStep: string): Step {
@@ -76,7 +76,7 @@ export class JourneyRunner {
   }
 
   async #pages(): Promise<any[]> {
-    return (await CdpDriver.listTargets(this.#port, TargetKind.Chrome)).filter((target) => target.type === "page" && target.webSocketDebuggerUrl);
+    return this.#chrome.pageTargets();
   }
 
   /** Connect to a target, enable its domains, and (when tracing) attach a TabTracer. */
@@ -109,26 +109,26 @@ export class JourneyRunner {
   }
 
   /**
-   * Attach to an existing page (or one matching `urlMatch`) and begin recording it. `bindBeforeFirstRun` arms
-   * THE ONE PAUSE (see {@link TabTracer}) so breakpoints bind *before* the upcoming navigation's scripts run —
-   * set it when the journey opens with a `goto`, so first-run / on-mount code (e.g. a SPA computing a value
-   * during initial render) is caught instead of missed. Left false for an attach-then-click flow, where the
-   * tab is already live and its handlers fire later on a click.
+   * Open a FRESH tab in the target window and begin recording it. We never reuse or hijack an existing tab —
+   * tab targeting is deliberately gone — so an attached, real session keeps its own tabs untouched while our
+   * tab rides the same profile (hence the same logins). The journey's first `goto:` step navigates this blank
+   * tab. `bindBeforeFirstRun` arms THE ONE PAUSE (see {@link TabTracer}) so breakpoints bind *before* that
+   * navigation's scripts run — set it when the journey opens with a `goto`, so first-run / on-mount code (e.g.
+   * a SPA computing a value during initial render) is caught instead of missed.
    */
-  async start(urlMatch?: string, bindBeforeFirstRun = false): Promise<void> {
-    let pages = await this.#pages();
-    if (!pages.length) {
-      // The debug Chrome is up but tabless (a prior run / the impersonation popup closed its tabs). Open a
-      // blank tab so attach is robust to tab state — the first `goto:` step navigates it. This removes the
-      // most common "no page target on :PORT" failure, which forced a manual re-seed of a tab before each run.
-      log(`no page target on :${this.#port} — opening a blank tab to attach`);
-      await CdpDriver.createPageTarget(this.#port).catch((error) => log(`could not open a tab on :${this.#port}: ${error?.message || error}`));
+  async start(bindBeforeFirstRun = false): Promise<void> {
+    // Everything already open is "known"; only the tab WE open (and any future popup) should count as new.
+    for (const page of await this.#pages()) this.#known.add(page.id);
+    // Open our own tab and attach to it. /json/new returns the tab descriptor (incl. its websocket), so the
+    // common case needs no re-list; some Chrome builds return a thin body, so fall back to spotting our new tab.
+    const opened = await this.#chrome.openBlankTab().catch((error) => { log(`could not open a tab on :${this.#chrome.port}: ${error?.message || error}`); return null; });
+    let target = opened?.webSocketDebuggerUrl ? opened : null;
+    if (!target) {
       await sleep(300);
-      pages = await this.#pages();
-      if (!pages.length) throw new Error(`no page target on :${this.#port} and could not open one — is the debug Chrome up?`);
+      target = (await this.#pages()).find((page) => !this.#known.has(page.id)) ?? null;
     }
-    const target = (urlMatch && pages.find((page) => (page.url || "").includes(urlMatch))) || pages[0];
-    for (const page of pages) this.#known.add(page.id); // everything open now is "known"; only future tabs count as new
+    if (!target?.webSocketDebuggerUrl) throw new Error(`could not open a tab on :${this.#chrome.port} — is the debug Chrome up?`);
+    this.#known.add(target.id);
     const driver = await this.#connect(target, { trace: true, bindBeforeFirstRun });
     this.#startTime = Date.now();
     await this.#switchTo(driver);

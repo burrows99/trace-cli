@@ -48,6 +48,8 @@ export class DynamicInput {
   // In Chrome launch mode the port isn't known until the browser is spawned, so only range-check a real port.
   @ValidateIf((input) => !input.launch) @IsInt() @Min(1) @Max(MAX_PORT) port: number;
   @IsOptional() @IsBoolean() launch?: boolean;
+  @IsOptional() @IsString() @IsNotEmpty() profileDir?: string; // chrome: persistent --user-data-dir (a logged-in profile)
+  @IsOptional() @IsBoolean() headed?: boolean;                 // chrome: launch the browser visibly
   @IsArray() @ArrayNotEmpty() @IsString({ each: true }) breakpoints: string[];
   @IsArray() @IsString({ each: true }) exprs: string[];
   @IsOptional() @IsArray() @IsString({ each: true }) steps?: string[]; // chrome: the ordered UI journey

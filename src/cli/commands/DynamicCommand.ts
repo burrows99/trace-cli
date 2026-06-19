@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 import { Tracer, type CaptureResult, type TraceOptions } from "../../engine/Tracer.js";
 import { Recorder } from "../../engine/Recorder.js";
-import { ChromeLauncher, type LaunchedChrome } from "../../engine/ChromeLauncher.js";
+import { ChromeLauncher } from "../../engine/ChromeLauncher.js";
+import { ChromeSession } from "../../engine/ChromeSession.js";
 import { Renderer } from "../../engine/Renderer.js";
 import { LineageAnalyzer } from "../../analysis/LineageAnalyzer.js";
 import { Trace, TraceData, CurlResponse } from "../../domain/Trace.js";
@@ -23,6 +24,8 @@ export type DynamicTargetKind = TargetKind;
 export interface DynamicRequest extends TraceOptions {
   target: DynamicTargetKind;
   launch?: boolean;            // chrome: spawn a throwaway headless Chrome instead of attaching to `port`
+  profileDir?: string;         // chrome: launch on a persistent --user-data-dir (a real, logged-in profile)
+  headed?: boolean;            // chrome: launch the browser visibly instead of headless
   recordOut?: string;          // explicit output path (else a temp file)
   /**
    * Live progress sink: called with a partial Trace as soon as the run starts (0 events) and again on every
@@ -63,15 +66,19 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
     // The session exists in the collector the instant the run begins (0 events), then updates on every hit.
     request.onProgress?.(this.#runningTrace([], context));
 
-    // Chrome launch mode (`--chrome` with no port): spawn a throwaway headless Chrome to BE the trace target,
-    // then tear it down. Attach mode (`--chrome <port>`) uses the running browser as-is.
-    let launched: LaunchedChrome | undefined;
+    // Chrome: acquire the browser through the launcher — it decides attach (`--chrome <port>`, used as-is),
+    // throwaway headless (`--chrome` no port), or a persistent logged-in profile (`--chrome-profile`), and hands
+    // back a session whose kill() tears down only what WE launched. Node needs none of this.
+    let session: ChromeSession | undefined;
     try {
       let options: TraceOptions = {
         ...request, sessionId,
         ...(request.onProgress ? { onEvent: (events) => request.onProgress!(this.#runningTrace(events, context)) } : {}),
       };
-      if (isChrome && request.launch) { launched = await ChromeLauncher.launch(); options = { ...options, port: launched.port }; }
+      if (isChrome) {
+        session = await ChromeLauncher.acquire({ port: request.port, launch: request.launch, profileDir: request.profileDir, headed: request.headed });
+        options = { ...options, port: session.port };
+      }
 
       // Both targets go through the engine the same way: one method, one CaptureResult. Chrome layers on the
       // extra it alone supports — the screen + trace-panel recording.
@@ -88,7 +95,7 @@ export class DynamicCommand extends TraceCommand<DynamicRequest, DynamicResult> 
       request.onProgress?.(this.#abortedTrace(error, context));
       throw error;
     } finally {
-      launched?.kill();
+      session?.kill();
     }
   }
 

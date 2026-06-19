@@ -32,10 +32,15 @@ const parseIntArg = (value: string) => parseInt(value, 10);
 const collect = (value: string, accumulator: string[]) => { accumulator.push(value); return accumulator; };
 const usage = (message: string): never => { process.stderr.write(`trace-cli: ${message}\n`); process.exit(2); };
 
-function pickTarget(options: any): { target: DynamicTargetKind; port: number; launch: boolean } {
-  if (options.chrome != null) {
-    const launch = options.chrome === true; // bare `--chrome` (no port) → launch a throwaway headless Chrome
-    return { target: TargetKind.Chrome, port: launch ? 0 : parseIntArg(options.chrome), launch };
+interface PickedTarget { target: DynamicTargetKind; port: number; launch: boolean; profileDir?: string; headed?: boolean; }
+function pickTarget(options: any): PickedTarget {
+  // A named --chrome-profile selects Chrome and implies launching it (a profile can only be grafted onto a
+  // browser we spawn), even without --chrome; bare --chrome (no port) launches a throwaway, a port attaches.
+  if (options.chrome != null || options.chromeProfile) {
+    const profileDir: string | undefined = options.chromeProfile || undefined;
+    const launch = profileDir != null || options.chrome === true;
+    const headed = options.headed === true || profileDir != null; // a logged-in profile is shown so you can watch/intervene
+    return { target: TargetKind.Chrome, port: launch ? 0 : parseIntArg(options.chrome), launch, ...(profileDir ? { profileDir } : {}), headed };
   }
   return { target: TargetKind.Node, port: options.node === undefined || options.node === true ? DEFAULT_NODE_PORT : parseIntArg(options.node), launch: false };
 }
@@ -101,8 +106,12 @@ export class Cli {
 
   async #runDynamic(options: any): Promise<void> {
     if (options.chrome != null && options.node != null) usage("pick one target: --node or --chrome, not both");
+    if (options.chromeProfile && options.node != null) usage("--chrome-profile is a chrome option — don't combine it with --node");
+    // --chrome-profile launches a browser on that profile; an explicit --chrome <port> means attach to a running one.
+    if (options.chromeProfile && typeof options.chrome === "string") usage("pick one: --chrome-profile launches a logged-in browser, or --chrome <port> attaches to a running one — not both");
+    if (options.headed && !(options.chrome != null || options.chromeProfile)) usage("--headed only applies when launching Chrome (use with --chrome or --chrome-profile)");
     if (options.concise && options.detailed) usage("pick one envelope verbosity: --concise or --detailed, not both");
-    const { target, port, launch } = pickTarget(options);
+    const { target, port, launch, profileDir, headed } = pickTarget(options);
     const isChrome = target === TargetKind.Chrome;
     if (!options.breakpoint.length) usage("run needs at least one --breakpoint (file:line or file@substring)");
     // Chrome trigger = an ordered UI journey; --url is shorthand for a leading `goto:`. Node trigger = a curl.
@@ -112,7 +121,7 @@ export class Cli {
     if (!isChrome && options.step.length) usage("--step is a chrome-only trigger (node uses --curl)");
     if (!isChrome && !options.curl) usage(`${target} target needs --curl`);
 
-    const input = new DynamicInput({ target, port, launch, breakpoints: options.breakpoint, exprs: options.expression, steps, curl: options.curl });
+    const input = new DynamicInput({ target, port, launch, profileDir, headed, breakpoints: options.breakpoint, exprs: options.expression, steps, curl: options.curl });
     const badInput = input.validate();
     if (badInput.length) usage(`invalid input — ${badInput.join("; ")}`);
 
@@ -143,12 +152,12 @@ export class Cli {
     let trace: Trace;
     try {
       ({ trace } = await this.#dynamic.run({
-        target, port, launch,
+        target, port, launch, profileDir, headed,
         breakpoints: options.breakpoint, exprs: options.expression,
         steps, curl: options.curl,
         root: options.root, maxHits: options.maxHits,
         recordOut: options.output,
-        args: { target, ...(launch ? { launch: true } : { port }), breakpoints: options.breakpoint, ...(options.root ? { root: options.root } : {}), ...(options.maxHits ? { maxHits: options.maxHits } : {}), ...(steps.length ? { steps: steps.map(redactStep) } : {}), ...(options.curl ? { curl: options.curl } : {}) },
+        args: { target, ...(launch ? { launch: true } : { port }), ...(profileDir ? { profile: profileDir } : {}), ...(headed && !profileDir ? { headed: true } : {}), breakpoints: options.breakpoint, ...(options.root ? { root: options.root } : {}), ...(options.maxHits ? { maxHits: options.maxHits } : {}), ...(steps.length ? { steps: steps.map(redactStep) } : {}), ...(options.curl ? { curl: options.curl } : {}) },
         ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
       }));
     } catch (error) {
@@ -260,6 +269,8 @@ export class Cli {
       .description("breakpoints + a trigger → a full execution trace. Breakpoints are non-pausing logpoints: each hit ships its stack + in-scope locals + exprs without halting the VM, so the app runs at full speed. Node (CDP): a --curl trigger. Chrome (CDP): a scripted UI journey (--url/--step) recorded as a screen + trace-panel replay — debug and video together.")
       .option("--node [port]", `Node --inspect target (default; port ${DEFAULT_NODE_PORT})`)
       .option("--chrome [port]", "Chrome target: a running browser's --remote-debugging-port, or omit the port to launch a throwaway headless Chrome")
+      .option("--chrome-profile <dir>", "Chrome: launch a (headed) browser on this persistent --user-data-dir so saved logins/cookies carry over — trace a real, authenticated session. Use a COPY of your profile (Chrome 136+ blocks remote-debugging on the default dir; one process per dir). Implies launching, so don't combine with --chrome <port>.")
+      .option("--headed", "Chrome: launch the browser visibly instead of headless (applies to --chrome / --chrome-profile launch modes; implied by --chrome-profile)")
       .option("--breakpoint <file:line>", "breakpoint, repeatable: file:line or file@substring (non-pausing; in-scope locals are captured automatically)", collect, [])
       .option("--expression <js>", "extra expression captured at every hit, repeatable — for computed/derived values beyond the auto-captured locals (e.g. user.id, cart.length)", collect, [])
       .option("--root <dir>", "project root for resolving --breakpoint file paths and source maps (default: cwd) — needed when a file@substring breakpoint or a built app's sources live outside cwd")

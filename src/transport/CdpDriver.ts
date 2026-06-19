@@ -78,8 +78,7 @@ export class CdpDriver implements ProtocolDriver {
   ): Promise<string> {
     const { kind = TargetKind.Node, urlMatch, titleMatch } = options;
     const targets = await CdpDriver.listTargets(port, kind);
-    let candidates = Array.isArray(targets) ? targets : [];
-    if (kind === TargetKind.Chrome) candidates = candidates.filter((candidate) => candidate.type === "page" && candidate.webSocketDebuggerUrl);
+    const candidates = Array.isArray(targets) ? targets : [];
     let target: any;
     if (urlMatch) target = candidates.find((candidate) => (candidate.url || "").includes(urlMatch));
     if (!target && titleMatch) target = candidates.find((candidate) => (candidate.title || "").includes(titleMatch));
