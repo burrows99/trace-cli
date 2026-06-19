@@ -204,11 +204,10 @@ export class Recorder {
     if (!scenes.length) return null;
 
     const tempDir = mkdtempSync(join(tmpdir(), "trace-journey-"));
-    const chrome = await ChromeLauncher.launch(["--force-device-scale-factor=1"], { purpose: "video render" });
+    const chrome = await ChromeLauncher.acquire({ launch: true, extraArgs: ["--force-device-scale-factor=1"], purpose: "video render" });
     let driver: CdpDriver | undefined;
     try {
-      const targets = await (await fetch(`http://localhost:${chrome.port}/json`)).json() as any[];
-      const page = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl) || targets[0];
+      const page = (await chrome.pageTargets())[0];
       if (!page?.webSocketDebuggerUrl) throw new Error("render Chrome exposed no page target");
       driver = await CdpDriver.connect(page.webSocketDebuggerUrl);
       await driver.send(Cdp.Page.enable);

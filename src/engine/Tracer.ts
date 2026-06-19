@@ -9,6 +9,7 @@ import { BINDING_NAME, HELPER_SOURCE, LogpointCapturer } from "./Logpoint.js";
 import { CurlTrigger, type CurlResult } from "./CurlTrigger.js";
 import { Screencaster } from "./Screencaster.js";
 import { CAPTURE_VIEWPORT } from "./Recorder.js";
+import { ChromeLauncher } from "./ChromeLauncher.js";
 import { JourneyRunner, type StepResult, type TraceConfig } from "./JourneyRunner.js";
 import { TraceEvent } from "../domain/TraceEvent.js";
 import { Breakpoint } from "../domain/Breakpoint.js";
@@ -155,18 +156,20 @@ export class Tracer {
    * driver; the binding/capture primitives are the same as Node.
    */
   async traceChrome(options: TraceOptions): Promise<CaptureResult> {
-    const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 100, urlMatch } = options;
+    const { port = DEFAULT_CHROME_PORT, steps = [], breakpoints = [], root, exprs = [], frames = 6, maxHits = 100 } = options;
     const parsedSteps = steps.map((step) => JourneyRunner.parseStep(step));
     const screencaster = new Screencaster(CAPTURE_VIEWPORT);   // portrait-ish: fills the replay's left pane, no letterbox
     const config: TraceConfig = { bps: BreakpointResolver.resolveAll(breakpoints, root), root, exprs, frames, maxHits, onEvent: options.onEvent };
-    const runner = new JourneyRunner(port, screencaster, config);
+    // Wrap the running browser (DynamicCommand already launched/attached it) as a session so target discovery
+    // goes through the bridge, not raw CdpDriver calls.
+    const runner = new JourneyRunner(ChromeLauncher.attach(port), screencaster, config);
     let stepResults: StepResult[] = [];
     let fatal: string | undefined;
     try {
       // Arm THE ONE PAUSE (bind-before-first-run, see TabTracer) only when the journey opens by navigating a
       // fresh tab — a leading `goto` — so on-mount code is caught. Attach-then-click flows don't need it.
       const bindBeforeFirstRun = parsedSteps[0]?.action === "goto";
-      await runner.start(urlMatch, bindBeforeFirstRun);
+      await runner.start(bindBeforeFirstRun);
       stepResults = await runner.run(parsedSteps);
     } catch (error: any) {
       fatal = String(error?.message ?? error);
