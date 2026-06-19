@@ -149,7 +149,7 @@ export class RunCommand extends TraceCommand<RunRequest, RunResult> {
     if (boundCount > 0 && capture.events.length === 0) {
       diagnostics.push(Diagnostic.warn(Code.BP_BOUND_UNHIT, `${boundCount} breakpoint(s) bound but never hit — the trigger may not have exercised this path (wrong route/branch, or the trigger didn't run).`));
     }
-    const lineage = LineageAnalyzer.compute(capture.events);
+    const lineage = new LineageAnalyzer().analyze(capture.events);
     const data = new TraceData({
       breakpoints: capture.breakpoints,
       events: capture.events,

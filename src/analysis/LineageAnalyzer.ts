@@ -1,15 +1,19 @@
 import { Lineage, LineagePoint, type LineageKind } from "../domain/Lineage.js";
 import type { TraceEvent } from "../domain/TraceEvent.js";
+import { Analyzer } from "./Analyzer.js";
 
 const norm = (value: unknown): string => { try { return JSON.stringify(value); } catch { return String(value); } };
 
 /**
- * LineageAnalyzer — the normalization tier. Derives mutation lineage (value-over-time) from the event
- * timeline: for every watched expression and local, the ordered series of its values, with each occurrence
- * flagged when it differs from the previous. Drops values that never change (no lineage without flow).
+ * LineageAnalyzer — the runtime-value analysis. An {@link Analyzer} over the captured event timeline: for every
+ * watched expression and local, the ordered series of its values, each occurrence flagged when it differs from
+ * the previous. Drops values that never change (no lineage without flow). A pure, synchronous in-process
+ * transform — TraceEvent[] → Lineage[].
  */
-export class LineageAnalyzer {
-  static compute(events: TraceEvent[] = []): Lineage[] {
+export class LineageAnalyzer extends Analyzer<TraceEvent[], Lineage[]> {
+  readonly name = "lineage";
+
+  analyze(events: TraceEvent[] = []): Lineage[] {
     const tracks = new Map<string, { name: string; kind: LineageKind; series: LineagePoint[] }>();
 
     for (const event of events) {
