@@ -67,6 +67,18 @@ export function condense(json: Record<string, unknown>): Record<string, unknown>
   return json;
 }
 
+/**
+ * emitFailureMessage — the end-of-run diagnostic for collector emit failures. An HTTP status means the collector
+ * received the request and rejected it; no status means the POST never landed (connection refused/timeout/DNS),
+ * so word each distinctly rather than calling both "rejected". `count` is the total failed emits this run; `last`
+ * is the most recent failure (whose reason is shown). Extracted so the wording/count stay unit-testable.
+ */
+export function emitFailureMessage(collector: string, count: number, last: EmitResult): string {
+  return last.status
+    ? `collector ${collector} rejected ${count} emit(s): HTTP ${last.status}${last.body ? ` — ${last.body.slice(0, 200)}` : ""}`
+    : `${count} emit(s) to collector ${collector} failed: ${last.error ?? "unknown error"}`;
+}
+
 /** emit policy: bare --json → JSON to stdout; --json <path> → file (stdout stays human); else human. */
 function emit(trace: Trace, renderHuman: () => string, options: any): void {
   // Enforce the envelope contract before it leaves the process: structural violations become error
@@ -120,20 +132,33 @@ export class Cli {
     // dashboard updates live as it runs.
     const collector = await Collector.resolve(options.emit);
     let emitChain: Promise<unknown> = Promise.resolve();
-    const emitFailures: EmitResult[] = [];
+    // Only the count and the most recent failure are surfaced, so keep just those — not every failed result.
+    // onProgress can emit on a hot path, and retaining each failure would grow memory without bound.
+    let emitFailureCount = 0;
+    let lastEmitFailure: EmitResult | undefined;
     const emitToCollector = collector
-      ? (envelope: unknown) => { emitChain = emitChain.then(async () => { const result = await Collector.emit(collector, envelope); if (!result.ok) emitFailures.push(result); }); }
+      ? (envelope: unknown) => { emitChain = emitChain.then(async () => { const result = await Collector.emit(collector, envelope); if (!result.ok) { emitFailureCount++; lastEmitFailure = result; } }); }
       : undefined;
 
-    const { trace } = await this.#dynamic.run({
-      target, port, launch,
-      breakpoints: options.breakpoint, exprs: options.expression,
-      steps, curl: options.curl,
-      root: options.root, maxHits: options.maxHits,
-      recordOut: options.output,
-      args: { target, ...(launch ? { launch: true } : { port }), breakpoints: options.breakpoint, ...(options.root ? { root: options.root } : {}), ...(options.maxHits ? { maxHits: options.maxHits } : {}), ...(steps.length ? { steps: steps.map(redactStep) } : {}), ...(options.curl ? { curl: options.curl } : {}) },
-      ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
-    });
+    let trace: Trace;
+    try {
+      ({ trace } = await this.#dynamic.run({
+        target, port, launch,
+        breakpoints: options.breakpoint, exprs: options.expression,
+        steps, curl: options.curl,
+        root: options.root, maxHits: options.maxHits,
+        recordOut: options.output,
+        args: { target, ...(launch ? { launch: true } : { port }), breakpoints: options.breakpoint, ...(options.root ? { root: options.root } : {}), ...(options.maxHits ? { maxHits: options.maxHits } : {}), ...(steps.length ? { steps: steps.map(redactStep) } : {}), ...(options.curl ? { curl: options.curl } : {}) },
+        ...(emitToCollector ? { onProgress: (intermediateTrace: Trace) => emitToCollector(intermediateTrace.toJSON()) } : {}),
+      }));
+    } catch (error) {
+      // The run threw (attach failed, engine crashed, recording threw). It already emitted a TERMINAL envelope
+      // via onProgress that clears the dashboard's "running" session — flush the chain so that POST actually
+      // lands before we exit, then surface the failure (non-zero exit + the same ENGINE_FATAL code in the log).
+      if (emitToCollector) await emitChain;
+      log.error("dynamic trace aborted before completion", { code: Code.ENGINE_FATAL, err: error });
+      process.exit(1);
+    }
 
     // Flush the final (complete) envelope and all pending emits BEFORE rendering, so a rejected emit
     // (a 400 schema error, a 503 dead store) becomes a visible diagnostic in the printed/--json envelope
@@ -141,10 +166,8 @@ export class Cli {
     if (emitToCollector) {
       emitToCollector(trace.toJSON());
       await emitChain;
-      if (emitFailures.length) {
-        const last = emitFailures[emitFailures.length - 1];
-        const reason = last.status ? `HTTP ${last.status}${last.body ? ` — ${last.body.slice(0, 200)}` : ""}` : (last.error ?? "unknown error");
-        trace.diagnostics.push(Diagnostic.warn(Code.EMIT, `collector ${collector} rejected ${emitFailures.length} emit(s): ${reason}`));
+      if (lastEmitFailure && collector) {
+        trace.diagnostics.push(Diagnostic.warn(Code.EMIT, emitFailureMessage(collector, emitFailureCount, lastEmitFailure)));
       }
     }
     emit(trace, () => this.#dynamic.render(trace), options);

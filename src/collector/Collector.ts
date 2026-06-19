@@ -15,6 +15,35 @@ export interface EmitResult { ok: boolean; status?: number; body?: string; error
  *  (14747, the compose-published host port from README/compose/scenarios), then the native `trace serve` default (4000). */
 const DEFAULT_CANDIDATES = ["http://localhost:14747", "http://localhost:4000"];
 const PROBE_TIMEOUT_MS = 500;
+/** Cap on the rejection body kept in an {@link EmitResult}: enough to carry a real error message, bounded so a
+ *  large error page can't bloat a caller that retains the result (e.g. across many onProgress emits). */
+const MAX_BODY_CHARS = 10_000;
+
+/**
+ * Read at most `maxChars` of a response body, then cancel the stream — so an oversized rejection page (an HTML
+ * 500, a stack-trace dump) can't cause a large transient buffer or extra download latency, not just an oversized
+ * *stored* body. Best-effort: a mid-read network error or a non-stream body falls back to keeping what we have.
+ */
+async function readCappedText(response: Response, maxChars: number): Promise<string> {
+  const stream = response.body;
+  if (!stream) return (await response.text().catch(() => "")).slice(0, maxChars);
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (text.length < maxChars) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();   // flush bytes buffered from a multi-byte char split across the last chunk boundary
+  } catch {
+    // mid-read failure (connection dropped while reading the error body) — surface whatever arrived
+  } finally {
+    await reader.cancel().catch(() => {});   // stop downloading the rest once we have enough
+  }
+  return text.slice(0, maxChars);
+}
 
 /**
  * Collector — the client-side emit helper for shipping trace envelopes to a remote collector.
@@ -36,7 +65,10 @@ export class Collector {
       }
       // A rejection is a real failure — log it at error with the collector's reason (e.g. "invalid envelope",
       // "trace store unavailable"), not at info. The caller folds this into the envelope's diagnostics.
-      const body = await response.text().catch(() => "");
+      // Cap the body at the source: read only up to MAX_BODY_CHARS off the stream and cancel, so a collector
+      // that answers with a giant HTML error page can't bloat process memory or stall on the download — callers
+      // hold onto the result. (The log line truncates further, to 500, separately.)
+      const body = await readCappedText(response, MAX_BODY_CHARS);
       log.error("emit rejected", { code: Code.EMIT, endpoint, status: response.status, body: body.slice(0, 500) });
       return { ok: false, status: response.status, body };
     } catch (error: any) {

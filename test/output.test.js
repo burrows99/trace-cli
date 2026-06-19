@@ -4,7 +4,7 @@ import "reflect-metadata";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { condense } from "../dist/cli/Cli.js";
+import { condense, emitFailureMessage } from "../dist/cli/Cli.js";
 import { Code } from "../dist/shared/codes.js";
 import { Collector } from "../dist/collector/Collector.js";
 
@@ -80,4 +80,24 @@ test("Collector.emit: a failed POST resolves to a rich result (never throws, nev
   assert.equal(result.ok, false, "a refused emit is not ok");
   assert.equal(typeof result.error, "string", "the failure reason is carried back, not dropped");
   assert.ok(result.error.length > 0, "error message is non-empty");
+});
+
+test("emitFailureMessage: an HTTP status reads as a 'rejected' diagnostic with the status + reason", () => {
+  const msg = emitFailureMessage("http://localhost:4000", 3, { ok: false, status: 400, body: "invalid envelope" });
+  assert.equal(msg, "collector http://localhost:4000 rejected 3 emit(s): HTTP 400 — invalid envelope");
+});
+
+test("emitFailureMessage: a no-status (network) failure reads as 'failed', never 'rejected'", () => {
+  // The bug this guards: a POST that never landed (connection refused/timeout/DNS) was reported as the collector
+  // having "rejected" a request it never received. A status-less failure must use the delivery wording instead.
+  const msg = emitFailureMessage("http://localhost:4000", 2, { ok: false, error: "fetch failed" });
+  assert.equal(msg, "2 emit(s) to collector http://localhost:4000 failed: fetch failed");
+  assert.doesNotMatch(msg, /rejected/, "a delivery failure must not claim the collector rejected anything");
+});
+
+test("emitFailureMessage: edge cases — no body omits the reason, missing error falls back, body caps at 200", () => {
+  assert.equal(emitFailureMessage("u", 1, { ok: false, status: 503 }), "collector u rejected 1 emit(s): HTTP 503");
+  assert.equal(emitFailureMessage("u", 1, { ok: false }), "1 emit(s) to collector u failed: unknown error");
+  const huge = emitFailureMessage("u", 1, { ok: false, status: 500, body: "x".repeat(5000) });
+  assert.equal(huge, "collector u rejected 1 emit(s): HTTP 500 — " + "x".repeat(200), "an oversized body is truncated to 200 chars in the diagnostic");
 });
