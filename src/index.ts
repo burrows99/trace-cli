@@ -21,7 +21,7 @@ export type { SessionStore, SessionSummary } from "./collector/SessionStore.js";
 export { RunCommand } from "./cli/commands/RunCommand.js";
 export type { RunRequest, RunResult, RunTargetKind } from "./cli/commands/RunCommand.js";
 export { DoctorCommand } from "./cli/commands/DoctorCommand.js";
-export { ExportSkillCommand } from "./cli/commands/ExportSkillCommand.js";
+export { ExportCommand } from "./cli/commands/ExportCommand.js";
 export { Cli } from "./cli/Cli.js";
 export { VERSION } from "./shared/version.js";
 export { logger, Logger } from "./shared/logger.js";

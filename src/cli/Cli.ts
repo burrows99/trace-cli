@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import { ManifestCommand } from "./commands/ManifestCommand.js";
 import { SchemaCommand } from "./commands/SchemaCommand.js";
 import { ServeCommand } from "./commands/ServeCommand.js";
-import { ExportSkillCommand } from "./commands/ExportSkillCommand.js";
+import { ExportCommand } from "./commands/ExportCommand.js";
 import { InputManager } from "../io/InputManager.js";
 import { InputError } from "../io/InputError.js";
 import { ProcessingManager, EngineAbortError } from "../io/ProcessingManager.js";
@@ -191,15 +191,16 @@ export class Cli {
         process.exit(0);
       });
 
-    program.command("export-skill")
-      .description("copy the bundled `trace` skill into a project's .claude/skills/ so Claude Code picks it up")
-      .argument("[dir]", "target project root (default: current directory)")
-      .option("--force", "overwrite an existing .claude/skills/trace")
-      .action((dir, options) => {
+    program.command("exports")
+      .description("provision a project's export directory (.claude/skills/trace): copy the bundled `trace` skill so Claude Code picks it up, AND build interactive HTML maps of the project — the whole-repo LSP map (graph.html) and the module-import graph (deps.html). One command to get everything.")
+      .argument("[dir]", "target project root (default: current directory) — also the project the maps are built from")
+      .option("--force", "overwrite an existing export directory (.claude/skills/trace)")
+      .action(async (dir, options) => {
         try {
-          const { src: source, dest: destination } = new ExportSkillCommand().run({ dir, force: options.force });
+          const { dest: destination, maps } = await new ExportCommand().run({ dir, force: options.force });
           process.stdout.write(`[trace-cli] skill exported → ${destination}\n`);
-          log.info("skill exported", { src: source, dest: destination });
+          for (const map of maps) process.stdout.write(`[trace-cli] ${map.kind} map → ${map.path}${map.ok ? "" : "  (empty/degraded — see the page)"}\n`);
+          log.info("export complete", { dest: destination, maps: maps.map((m) => ({ kind: m.kind, ok: m.ok })) });
           process.exit(0);
         } catch (error: any) {
           process.stderr.write(`trace-cli: ${error.message}\n`);
